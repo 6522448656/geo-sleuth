@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import http.server
 import io
 import json
@@ -325,6 +326,57 @@ class CoverageTests(unittest.TestCase):
         with patch.object(gsv, "_curl", return_value=good) as m:
             self.assertEqual(len(gsv.tile_panos(6, 6, None, self.cache)), 1)
             self.assertEqual(m.call_count, 1)
+
+    def test_disappearing_coverage_cache_is_refetched(self):
+        cached = self.cache / "cov17_7_7.txt"
+        cached.write_text(")]}'\n<html>429 Too Many Requests</html>", encoding="utf-8")
+        read_text = Path.read_text
+
+        def read(path, *args, **kwargs):
+            if path == cached:
+                path.unlink()  # another worker removed a stale entry before this read
+            return read_text(path, *args, **kwargs)
+
+        good = _coverage([(self.PID, 51.44, 5.47)]).encode()
+        with patch.object(Path, "read_text", read), patch.object(gsv, "_curl", return_value=good) as fetch:
+            self.assertEqual(gsv.tile_panos(7, 7, None, self.cache), [(self.PID, 51.44, 5.47)])
+        self.assertEqual(fetch.call_count, 1)
+        self.assertEqual(gsv._coverage_rows(cached.read_text()), gsv._coverage_rows(good.decode()))
+
+    def test_shared_coverage_tile_uses_one_fetch(self):
+        for stale in (False, True):
+            with self.subTest(stale=stale):
+                cached = self.cache / "cov17_8_8.txt"
+                if stale:
+                    cached.write_text(")]}'\n<html>429 Too Many Requests</html>", encoding="utf-8")
+                fetching, release, started = threading.Event(), threading.Event(), threading.Event()
+                good = _coverage([(self.PID, 51.44, 5.47)]).encode()
+
+                def curl(*args, **kwargs):
+                    fetching.set()
+                    if not release.wait(5):
+                        raise RuntimeError("test did not release coverage request")
+                    return good
+
+                def second():
+                    started.set()
+                    return gsv.tile_panos(8, 8, None, self.cache)
+
+                with patch.object(gsv, "_curl", side_effect=curl) as fetch, ThreadPoolExecutor(2) as ex:
+                    first = ex.submit(gsv.tile_panos, 8, 8, None, self.cache)
+                    try:
+                        self.assertTrue(fetching.wait(5))
+                        other = ex.submit(second)
+                        self.assertTrue(started.wait(5))
+                        with self.assertRaises(TimeoutError):
+                            other.result(timeout=0.1)
+                    finally:
+                        release.set()
+                    expected = [(self.PID, 51.44, 5.47)]
+                    self.assertEqual(first.result(timeout=5), expected)
+                    self.assertEqual(other.result(timeout=5), expected)
+                    self.assertEqual(fetch.call_count, 1)
+                cached.unlink()
 
     def test_targets_reports_failed_lookups(self):
         pts = self.cache / "pts.json"

@@ -74,7 +74,7 @@ The endpoints are all at `https://mapsv0.bdimg.com/`, need no key, and must be a
 
 | Source | Use | Known issues |
 |---|---|---|
-| Google Street View | Street view outside China, with historical dates; `gsv.py` | Almost none in China; user-uploaded panoramas (ids like CIHM0og…) can't produce perspective views, and the script already filters them out; `gsv.py targets` lists panoramas per z17 tile through the Maps web client's coverage layer (`/maps/photometa/ac/v1`), undocumented like the other endpoints; a failed coverage lookup is reported and not cached; the layer can miss a place that `near` finds (Longyearbyen, 78.2°N: no panoramas listed), so a target with no views is worth one `near` check |
+| Google Street View | Street view outside China, with historical dates; `gsv.py` | Almost none in China; user-uploaded panoramas are filtered because perspective rendering fails. `targets` uses the undocumented z17 coverage layer (`/maps/photometa/ac/v1`); failures are reported and not cached. The layer is incomplete: empty coverage is not evidence against a target; check with `near` |
 | Mapillary, KartaView | Crowdsourced street view, rural roads outside China | Almost none in China |
 | Tencent Street View | Backup in China | API not yet investigated |
 | Map POI photos, hotel/scenic-area photos online, tourist photos | Compare skylines and building shapes when there's no street view | Shooting angle can't be controlled |

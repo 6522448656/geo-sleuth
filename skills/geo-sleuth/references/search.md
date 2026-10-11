@@ -98,19 +98,18 @@ Suits objects that "you can't name, but have a rare shape" (the v004 fountain).
 
 ## 6. Building-class scan (every church / mosque / station in a region)
 
-Use when the frame shows a building of a class you can name (church, mosque, temple, station, water tower, school) seen from the street, the country or a region is known, and nothing names this particular one. Instead of guessing which one, look at all of them and let `match.py` rank:
+Use for an unnamed building of a recognizable class seen from the street. Narrow to a city or smaller justified bbox first, and check `osm.py coverage` before enumerating:
 
 ```bash
 uv run ${CLAUDE_SKILL_DIR}/scripts/osm.py find --bbox <s,w,n,e> '["building"="church"]' --out targets.json        # or ["amenity"="place_of_worship"]["religion"="muslim"], ["railway"="station"] …
 uv run ${CLAUDE_SKILL_DIR}/scripts/gsv.py targets --points targets.json --per 2 --out targets.index.json --sheet first.jpg
-uv run ${CLAUDE_SKILL_DIR}/scripts/match.py rank --query photo.jpg --query-box <building part> --items targets.index.json --render gsv --refine sift --max-candidates <views> --top 24 --out r.json --sheet r.jpg
+uv run ${CLAUDE_SKILL_DIR}/scripts/match.py rank --query photo.jpg --query-box <building part> --items targets.index.json --render gsv --refine sift --top 10 --out r.json --sheet r.jpg
 ```
 
-- `gsv.py targets` lists the official panoramas in the z17 coverage tiles around each target and keeps up to `--per` of them between `--min-dist` and `--max-dist` (default 12–70 m, ≥15 m apart), each rendered facing the target. One coverage request per tile, cached, so a city takes seconds and a country minutes.
-- `match.py` caps candidates at 400 by default; pass `--max-candidates` with the view count `targets` prints.
-- **Read the top 24 by target, not by image**: the true building usually shows up with both of its views near the top, while a false positive is one view lifted by SIFT on repetitive brickwork or kerbs. Measured on a Street View screenshot of a city church: 50 churches → 100 views, the true church's two views ranked #2 and #3 (highest global similarity), #1 was a single 16-inlier false match. Country-wide with the same settings (bbox split 4×4; 8,769 church buildings, 16,571 views) the true church's two views were both in the top 15.
-- Country-wide Overpass queries time out: split the bbox into tiles (e.g. 4×4) and merge; `["building"="church"]` is a much lighter query than an `around` join with roads.
-- Then confirm as in SKILL step 5: render every panorama within ~130 m of the winning target facing it and compare ≥3 invariant features.
+- `targets` keeps up to `--per` official panoramas per target, 12–70 m away and ≥15 m apart by default, each facing the building. Coverage tiles are cached and shared by workers.
+- Keep each index within `match.py`'s default 400-view limit (at most 200 targets with `--per 2`). It loads all candidate images into memory; raising `--max-candidates` to a country-wide view count can exhaust memory. Narrow the bbox or split the point list before scanning, and save each batch's results separately; SIFT refinement within separate batches is not a global ranking.
+- Compare multiple views of shortlisted targets. Repetitive brickwork can produce false SIFT matches; confirm ≥3 invariant features as in SKILL step 5.
+- Empty coverage does not exclude a target: the layer can omit panoramas that `gsv.py near <lat,lon> --radius 130` finds. Check shortlisted targets with `near`, including historical captures when appropriate.
 
 ## Common mistakes
 

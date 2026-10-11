@@ -44,6 +44,8 @@ THUMB = ("https://streetviewpixels-pa.googleapis.com/v1/thumbnail?panoid={id}&cb
          "&w={w}&h={h}&yaw={yaw:.1f}&pitch={pitch:.1f}&thumbfov={fov:.0f}")
 # Coverage layer the Maps web client draws: every official panorama inside one z17 tile (~300 m), one request per tile
 COVERAGE = "https://www.google.com/maps/photometa/ac/v1?pb=!1m1!1smaps_sv.tactile!6m3!1i{x}!2i{y}!3i17!8b1"
+# Bound lock storage while serializing workers that share a coverage tile.
+_COVERAGE_LOCKS = [threading.Lock() for _ in range(64)]
 
 
 def _curl(url: str, proxy: str | None, out: Path | None = None, data: str | None = None) -> bytes:
@@ -162,20 +164,17 @@ def tile_panos(x: int, y: int, proxy: str | None, cache: Path) -> list[tuple[str
     cache.mkdir(parents=True, exist_ok=True)
     x %= 2 ** 17  # tiles wrap at the antimeridian
     p = cache / f"cov17_{x}_{y}.txt"
-    if p.exists() and p.stat().st_size > 0:
-        t = p.read_text(encoding="utf-8", errors="replace")
+    with _COVERAGE_LOCKS[hash(p.resolve()) % len(_COVERAGE_LOCKS)]:
         try:
+            rows = _coverage_rows(p.read_text(encoding="utf-8", errors="replace"))
+        except (FileNotFoundError, ServiceError):
+            p.unlink(missing_ok=True)  # missing, empty, or invalid cache: fetch again
+            t = _curl(COVERAGE.format(x=x, y=y), proxy).decode("utf-8", "replace")
             rows = _coverage_rows(t)
-        except ServiceError:
-            p.unlink(missing_ok=True)  # a bad reply cached by an older version: fetch again
-            return tile_panos(x, y, proxy, cache)
-    else:
-        t = _curl(COVERAGE.format(x=x, y=y), proxy).decode("utf-8", "replace")
-        rows = _coverage_rows(t)
-        # several targets share tiles and run in parallel: write then rename so nobody reads a half-written file
-        tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(t, encoding="utf-8")
-        os.replace(tmp, p)
+            # Atomic replacement also protects readers in other processes.
+            tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text(t, encoding="utf-8")
+            os.replace(tmp, p)
     out = []
     for r in rows:
         try:
@@ -352,7 +351,8 @@ def main() -> None:
         print(f"{len(pts)} targets -> {len(items)} views ({len(empty)} targets without a panorama "
               f"within {args.min_dist:.0f}–{args.max_dist:.0f} m, {len(failed)} lookups failed) -> {out}")
         if len(items) > 400:
-            print(f"match.py caps candidates at --max-candidates 400 by default: pass --max-candidates {len(items)}", file=sys.stderr)
+            print("match.py loads all candidate images into memory and caps candidates at 400 by default: "
+                  "split the target points into smaller batches or narrow the area before ranking", file=sys.stderr)
         if args.sheet and items:
             sheet(items[:args.limit], args.sheet, args.proxy, args.cache)
             print(args.sheet)
