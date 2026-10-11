@@ -429,5 +429,36 @@ class CoverageTests(unittest.TestCase):
         self.assertTrue(all(0 <= x < 2 ** 17 for x, _ in tiles))
         self.assertIn(0, {x for x, _ in tiles})
 
+class FontTests(unittest.TestCase):
+    def _tried_paths(self, env):
+        tried = []
+
+        def fake_truetype(path, size):
+            tried.append(path)
+            raise OSError("not found")
+
+        with patch.dict(os.environ, env, clear=True),                 patch.object(baidu_pano.ImageFont, "truetype", side_effect=fake_truetype),                 patch.object(baidu_pano.ImageFont, "load_default", return_value="default"):
+            self.assertEqual(baidu_pano._font(16), "default")
+        return tried
+
+    def test_windows_cjk_fonts_are_tried(self):
+        tried = self._tried_paths({})
+        self.assertIn("C:/Windows/Fonts/msyh.ttc", tried)
+        self.assertIn("C:/Windows/Fonts/simsun.ttc", tried)
+
+    def test_geo_font_is_tried_first(self):
+        tried = self._tried_paths({"GEO_FONT": "D:/fonts/custom.ttf"})
+        self.assertEqual(tried[0], "D:/fonts/custom.ttf")
+
+    def test_first_available_font_is_used(self):
+        def fake_truetype(path, size):
+            if path != "C:/Windows/Fonts/simhei.ttf":
+                raise OSError("not found")
+            return path
+
+        with patch.dict(os.environ, {}, clear=True),                 patch.object(baidu_pano.ImageFont, "truetype", side_effect=fake_truetype):
+            self.assertEqual(baidu_pano._font(16), "C:/Windows/Fonts/simhei.ttf")
+
+
 if __name__ == "__main__":
     unittest.main()

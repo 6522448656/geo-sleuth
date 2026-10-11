@@ -27,6 +27,7 @@ from _net import fetch_bytes, PROXY_HELP
 import io
 import json
 import math
+import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -152,9 +153,18 @@ def render(pid: str, heading: float, pitch: float = 10, fov: float = 80,
     return Image.open(io.BytesIO(data))
 
 
+# CJK-capable fonts, tried in order; GEO_FONT can point at any other font file.
+_FONT_PATHS = (
+    "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc",
+    "/System/Library/Fonts/STHeiti Medium.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+)
+
+
 def _font(size: int):
-    for p in ("/System/Library/Fonts/STHeiti Medium.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc",
-              "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"):
+    for p in (os.environ.get("GEO_FONT", "").strip(), *_FONT_PATHS):
+        if not p:
+            continue
         try:
             return ImageFont.truetype(p, size)
         except Exception:
