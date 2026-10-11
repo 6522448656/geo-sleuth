@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 from _net import curl_args, PROXY_HELP
 import json
+import math
 import os
 import re
 import subprocess
@@ -135,24 +136,46 @@ def pick_date(res: dict, date: str) -> dict | None:
     return None
 
 
+def _coverage_rows(t: str) -> list:
+    """Rows of one coverage reply. An empty tile (sea, no coverage) is []; anything else that isn't a coverage reply
+    (network failure, 429 page, changed layout) raises ServiceError so it isn't mistaken for missing coverage."""
+    if not t.startswith(")]}'"):
+        raise ServiceError(f"unreadable coverage reply: {' '.join(t.split())[:160] or 'empty (network?)'}")
+    try:
+        d = json.loads(t[t.index("\n") + 1:])
+    except ValueError:
+        raise ServiceError(f"unreadable coverage reply: {t[:160]}") from None
+    # with panoramas: [null, [null, [rows…]], …]; an empty tile: [null, null, [cells…]]
+    if not isinstance(d, list) or len(d) < 2 or not (d[1] is None or isinstance(d[1], list)):
+        raise ServiceError(f"unexpected coverage reply: {t[:160]}")
+    if d[1] is None:
+        return []
+    rows = d[1][1] if len(d[1]) > 1 else None
+    if not (rows is None or isinstance(rows, list)):
+        raise ServiceError(f"unexpected coverage reply: {t[:160]}")
+    return rows or []
+
+
 def tile_panos(x: int, y: int, proxy: str | None, cache: Path) -> list[tuple[str, float, float]]:
-    """All official panoramas in z17 tile (x, y) as (id, lat, lon). Cached; an empty tile (sea, no coverage) is []."""
+    """All official panoramas in z17 tile (x, y) as (id, lat, lon). An empty tile (sea, no coverage) is [].
+    Only replies that parse as coverage are cached; a failed lookup raises ServiceError and is retried next time."""
     cache.mkdir(parents=True, exist_ok=True)
+    x %= 2 ** 17  # tiles wrap at the antimeridian
     p = cache / f"cov17_{x}_{y}.txt"
     if p.exists() and p.stat().st_size > 0:
         t = p.read_text(encoding="utf-8", errors="replace")
+        try:
+            rows = _coverage_rows(t)
+        except ServiceError:
+            p.unlink(missing_ok=True)  # a bad reply cached by an older version: fetch again
+            return tile_panos(x, y, proxy, cache)
     else:
         t = _curl(COVERAGE.format(x=x, y=y), proxy).decode("utf-8", "replace")
-        if t.startswith(")]}'"):
-            # several targets share tiles and run in parallel: write then rename so nobody reads a half-written file
-            tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-            tmp.write_text(t, encoding="utf-8")
-            os.replace(tmp, p)
-    try:
-        d = json.loads(t[t.index("\n") + 1:])
-        rows = d[1][1] or []
-    except (ValueError, IndexError, TypeError):
-        return []
+        rows = _coverage_rows(t)
+        # several targets share tiles and run in parallel: write then rename so nobody reads a half-written file
+        tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(t, encoding="utf-8")
+        os.replace(tmp, p)
     out = []
     for r in rows:
         try:
@@ -165,18 +188,29 @@ def tile_panos(x: int, y: int, proxy: str | None, cache: Path) -> list[tuple[str
     return out
 
 
+def tiles_around(lat: float, lon: float, max_d: float) -> list[tuple[int, int]]:
+    """z17 tiles covering every point within max_d metres of (lat, lon); tiles get narrower towards the poles."""
+    dlat = math.degrees(max_d / geo._R)
+    dlon = math.degrees(max_d / (geo._R * max(math.cos(math.radians(lat)), 1e-6)))
+    top = min(lat + dlat, 85.05)
+    bottom = max(lat - dlat, -85.05)
+    x0, y0 = (int(v // 256) for v in geo.ll2px(17, top, lon - min(dlon, 180)))
+    x1, y1 = (int(v // 256) for v in geo.ll2px(17, bottom, lon + min(dlon, 180)))
+    n = 2 ** 17
+    xs = sorted({x % n for x in range(x0, x1 + 1)})
+    return [(x, y) for x in xs for y in range(max(y0, 0), min(y1, n - 1) + 1)]
+
+
 def panos_around(lat: float, lon: float, min_d: float, max_d: float, per: int, spacing: float,
                  proxy: str | None, cache: Path) -> list[tuple[str, float, float, float]]:
     """Up to `per` panoramas between min_d and max_d metres from (lat, lon), nearest first and at least `spacing` m apart.
-    Returns (id, lat, lon, distance)."""
-    cx, cy = (int(v // 256) for v in geo.ll2px(17, lat, lon))
+    Returns (id, lat, lon, distance). Raises ServiceError when a coverage lookup fails."""
     cands = []
-    for dx in (-1, 0, 1):
-        for dy in (-1, 0, 1):
-            for pid, la, lo in tile_panos(cx + dx, cy + dy, proxy, cache):
-                d = geo.distance((lat, lon), (la, lo))
-                if min_d <= d <= max_d:
-                    cands.append((d, pid, la, lo))
+    for tx, ty in tiles_around(lat, lon, max_d):
+        for pid, la, lo in tile_panos(tx, ty, proxy, cache):
+            d = geo.distance((lat, lon), (la, lo))
+            if min_d <= d <= max_d:
+                cands.append((d, pid, la, lo))
     picked: list[tuple[str, float, float, float]] = []
     for d, pid, la, lo in sorted(cands):
         if all(geo.distance((la, lo), (p[1], p[2])) >= spacing for p in picked):
@@ -293,12 +327,19 @@ def main() -> None:
 
         def around(kv):
             name, (la, lo) = kv
-            return name, (la, lo), panos_around(la, lo, args.min_dist, args.max_dist, args.per, args.spacing,
-                                                args.proxy, args.cache)
+            try:
+                return name, (la, lo), panos_around(la, lo, args.min_dist, args.max_dist, args.per, args.spacing,
+                                                    args.proxy, args.cache), None
+            except ServiceError as e:
+                return name, (la, lo), [], e
 
-        items, empty = [], []
+        items, empty, failed = [], [], []
         with ThreadPoolExecutor(8) as ex:
-            for name, tgt, picked in ex.map(around, pts.items()):
+            for name, tgt, picked, err in ex.map(around, pts.items()):
+                if err:
+                    failed.append(name)
+                    print(f"{name}: coverage lookup failed ({err})", file=sys.stderr)
+                    continue
                 if not picked:
                     empty.append(name)
                 for pid, la, lo, d in picked:
@@ -309,12 +350,16 @@ def main() -> None:
         out = args.out if args.out.name.endswith(".index.json") else args.out.with_suffix(".index.json")
         out.write_text(json.dumps(items, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"{len(pts)} targets -> {len(items)} views ({len(empty)} targets without a panorama "
-              f"within {args.min_dist:.0f}–{args.max_dist:.0f} m) -> {out}")
+              f"within {args.min_dist:.0f}–{args.max_dist:.0f} m, {len(failed)} lookups failed) -> {out}")
         if len(items) > 400:
             print(f"match.py caps candidates at --max-candidates 400 by default: pass --max-candidates {len(items)}", file=sys.stderr)
         if args.sheet and items:
             sheet(items[:args.limit], args.sheet, args.proxy, args.cache)
             print(args.sheet)
+        if failed:
+            # failed tiles aren't cached, so running the same command again retries only those
+            sys.exit(f"Google Street View coverage lookup failed for {len(failed)} of {len(pts)} targets; "
+                     "rerun later or run doctor.py --network to check service access")
     else:
         panos: dict[str, dict] = {}
         if args.ids:

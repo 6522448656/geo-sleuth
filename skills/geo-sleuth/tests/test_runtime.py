@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import http.server
+import io
 import json
+import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -264,6 +267,115 @@ class StreetViewTests(unittest.TestCase):
             with patch.object(gsv, "_curl", return_value=bad.encode()), self.assertRaises(gsv.ServiceError):
                 gsv.near(49.2161, -123.1093, 50, None)
 
+
+
+def _coverage(panos: list[tuple[str, float, float]]) -> str:
+    """A coverage tile reply in the layout photometa/ac/v1 returns; no panoramas gives the empty-tile layout."""
+    if not panos:
+        return ")]}'\n" + json.dumps([None, None, [["ChA0YTkw", [None, None, [None, None, 40.0, -40.0]]]]])
+    rows = [[[[2, pid], None, [[None, None, la, lo], [19.2, None, 63.4], [45.9, 0.27, 1.5]]], [27, 113]] for pid, la, lo in panos]
+    return ")]}'\n" + json.dumps([None, [None, rows]])
+
+
+class CoverageTests(unittest.TestCase):
+    PID = "77-Z-M-G0QlSNisjusa5DA"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cache = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def world(self, panos):
+        """_curl stand-in serving each z17 tile only the panoramas inside it; records requested tiles."""
+        asked = []
+
+        def curl(url, proxy, out=None, data=None):
+            x, y = map(int, re.search(r"!1i(\d+)!2i(\d+)", url).groups())
+            asked.append((x, y))
+            inside = [(pid, la, lo) for pid, la, lo in panos
+                      if tuple(int(v // 256) for v in gsv.geo.ll2px(17, la, lo)) == (x, y)]
+            return _coverage(inside).encode()
+        return curl, asked
+
+    def test_empty_tile_vs_failed_lookup(self):
+        with patch.object(gsv, "_curl", return_value=_coverage([]).encode()):
+            self.assertEqual(gsv.tile_panos(1, 1, None, self.cache), [])
+        with patch.object(gsv, "_curl", return_value=_coverage([(self.PID, 51.44, 5.47)]).encode()):
+            self.assertEqual(gsv.tile_panos(2, 2, None, self.cache), [(self.PID, 51.44, 5.47)])
+        for bad in ("<html>429 Too Many Requests</html>", "", ")]}'\n<html>429 Too Many Requests</html>",
+                    ")]}'\n[3,\"Invalid request\"]", ")]}'\n{\"error\": 1}"):
+            with patch.object(gsv, "_curl", return_value=bad.encode()), self.assertRaises(gsv.ServiceError):
+                gsv.tile_panos(3, 3, None, self.cache)
+
+    def test_failed_reply_is_not_cached(self):
+        bad = ")]}'\n<html>429 Too Many Requests</html>"
+        with patch.object(gsv, "_curl", return_value=bad.encode()), self.assertRaises(gsv.ServiceError):
+            gsv.tile_panos(5, 5, None, self.cache)
+        self.assertEqual([f.name for f in self.cache.iterdir()], [])
+        good = _coverage([(self.PID, 51.44, 5.47)]).encode()
+        with patch.object(gsv, "_curl", return_value=good) as m:
+            self.assertEqual(len(gsv.tile_panos(5, 5, None, self.cache)), 1)
+            self.assertEqual(m.call_count, 1)  # retried, not served from cache
+            self.assertEqual(len(gsv.tile_panos(5, 5, None, self.cache)), 1)
+            self.assertEqual(m.call_count, 1)  # a valid reply is cached
+        # an error reply left in the cache by an older version is fetched again
+        (self.cache / "cov17_6_6.txt").write_text(bad, encoding="utf-8")
+        with patch.object(gsv, "_curl", return_value=good) as m:
+            self.assertEqual(len(gsv.tile_panos(6, 6, None, self.cache)), 1)
+            self.assertEqual(m.call_count, 1)
+
+    def test_targets_reports_failed_lookups(self):
+        pts = self.cache / "pts.json"
+        pts.write_text(json.dumps({"church": [51.44, 5.47]}), encoding="utf-8")
+        out = self.cache / "t.index.json"
+        argv = ["gsv.py", "targets", "--points", str(pts), "--out", str(out), "--cache", str(self.cache / "c")]
+        with patch.object(gsv, "_curl", return_value=b"<html>429 Too Many Requests</html>"), \
+                patch.object(sys, "argv", argv), patch("sys.stdout", new=io.StringIO()) as stdout, \
+                patch("sys.stderr", new=io.StringIO()), self.assertRaises(SystemExit) as e:
+            gsv.main()
+        self.assertIn("lookup failed", str(e.exception.code))
+        self.assertIn("0 targets without a panorama", stdout.getvalue())
+        self.assertIn("1 lookups failed", stdout.getvalue())
+
+    def _edge_target(self, lat):
+        """A target 1 px inside the eastern edge of its z17 tile."""
+        x, y = gsv.geo.ll2px(17, lat, 5.0)
+        tx = int(x // 256)
+        tlat, tlon = gsv.geo.px2ll(17, (tx + 1) * 256 - 1, y)
+        return tx, tlat, tlon
+
+    def _east(self, lat, lon, metres):
+        return lon + math.degrees(metres / (gsv.geo._R * math.cos(math.radians(lat))))
+
+    def test_radius_wider_than_one_tile(self):
+        tx, lat, lon = self._edge_target(51.5)
+        plon = self._east(lat, lon, 250)
+        self.assertEqual(int(gsv.geo.ll2px(17, lat, plon)[0] // 256), tx + 2)  # outside the old 3x3 block
+        curl, asked = self.world([(self.PID, lat, plon)])
+        with patch.object(gsv, "_curl", side_effect=curl):
+            got = gsv.panos_around(lat, lon, 12, 300, 2, 15, None, self.cache)
+        self.assertEqual([g[0] for g in got], [self.PID])
+        self.assertAlmostEqual(got[0][3], 250, delta=1)
+        self.assertIn(tx + 2, {a[0] for a in asked})
+        with patch.object(gsv, "_curl", side_effect=curl):  # the exact distance filter still applies
+            self.assertEqual(gsv.panos_around(lat, lon, 12, 200, 2, 15, None, self.cache), [])
+
+    def test_high_latitude_default_radius(self):
+        tx, lat, lon = self._edge_target(78.2)
+        plon = self._east(lat, lon, 69)
+        self.assertEqual(int(gsv.geo.ll2px(17, lat, plon)[0] // 256), tx + 2)
+        curl, _ = self.world([(self.PID, lat, plon)])
+        with patch.object(gsv, "_curl", side_effect=curl):
+            got = gsv.panos_around(lat, lon, 12, 70, 2, 15, None, self.cache)
+        self.assertEqual([g[0] for g in got], [self.PID])
+
+    def test_tile_range_stays_small(self):
+        self.assertLessEqual(len(gsv.tiles_around(51.5, 5.0, 70)), 4)  # a 70 m radius spans at most 2x2 tiles of ~190 m
+        tiles = gsv.tiles_around(0.0, 179.9999, 300)  # wraps across the antimeridian
+        self.assertTrue(all(0 <= x < 2 ** 17 for x, _ in tiles))
+        self.assertIn(0, {x for x, _ in tiles})
 
 if __name__ == "__main__":
     unittest.main()
