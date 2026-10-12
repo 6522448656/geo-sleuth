@@ -155,7 +155,8 @@ def render(pid: str, heading: float, pitch: float = 10, fov: float = 80,
 
 # CJK-capable fonts, tried in order; GEO_FONT can point at any other font file.
 _FONT_PATHS = (
-    "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc",
+    "C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/msyhbd.ttc",
+    "C:/Windows/Fonts/simhei.ttf", "C:/Windows/Fonts/simsun.ttc",
     "/System/Library/Fonts/STHeiti Medium.ttc", "/System/Library/Fonts/Hiragino Sans GB.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 )

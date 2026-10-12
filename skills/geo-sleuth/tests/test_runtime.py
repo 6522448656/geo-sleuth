@@ -444,6 +444,7 @@ class FontTests(unittest.TestCase):
     def test_windows_cjk_fonts_are_tried(self):
         tried = self._tried_paths({})
         self.assertIn("C:/Windows/Fonts/msyh.ttc", tried)
+        self.assertIn("C:/Windows/Fonts/msyhbd.ttc", tried)
         self.assertIn("C:/Windows/Fonts/simsun.ttc", tried)
 
     def test_geo_font_is_tried_first(self):
