@@ -281,6 +281,14 @@ flowchart LR
 
 以图搜图需要 **Google Chrome 或 Playwright Chromium**，先尝试 Chrome，启动失败则回退到 Chromium。两者都没有时运行 `uvx playwright install chromium`。Linux 缺少系统库时可用 `uvx playwright install --with-deps chromium`；Playwright 升级后若提示缺少浏览器可执行文件，重新运行安装命令。
 
+`match.py` 和 `sat_scan.py` 会优先使用当前 torch 可用的 CUDA，其次是 MPS，最后是 CPU，并打印所选设备（如 `model ... ready (cuda, ...)`）。设置环境变量 `GEO_DEVICE=cpu|cuda|mps` 可指定设备。Windows 上默认 `uv run` 安装的是仅支持 CPU 的 torch；使用 NVIDIA GPU 时，添加驱动支持的 CUDA 构建（`nvidia-smi` 显示驱动支持的最高 CUDA 版本，`cu126` 代表 CUDA 12.6）：
+
+```bash
+uv run --find-links https://download.pytorch.org/whl/cu126/torch/ skills/geo-sleuth/scripts/match.py rank --query photo.jpg --images cands/ --out ranked.json
+```
+
+这个选项只添加 torch 构建，其他包仍从 PyPI 安装。首次运行需下载约 2.4 GB。
+
 在仓库根目录自检（PowerShell 也可运行）：
 
 ```bash
