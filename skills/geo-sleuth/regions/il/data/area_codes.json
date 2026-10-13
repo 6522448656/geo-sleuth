@@ -1,0 +1,68 @@
+{
+ "_meta": {
+  "kind": "area-code",
+  "normalize": {
+   "digits_only": true,
+   "ensure_prefix": "0"
+  },
+  "key_pattern": "^0[23489](?=\\d{7}$)",
+  "usage": "full landline number in national form (9 digits): 02-623-4567, (04) 812-3456; drop a leading +972. A bare code is not accepted, so other countries' codes don't match",
+  "note": "Only five geographic codes, each covering one or more districts; the source names areas, the city examples in notes are marked unverified.",
+  "miss_note": "not an Israeli geographic code: 05x mobile, 07x VoIP/non-geographic, 1-700/1-800 numbers",
+  "source": [
+   "https://en.wikipedia.org/wiki/Telephone_numbers_in_Israel"
+  ],
+  "fetched": "2026-10-13",
+  "license": "Derived from Wikipedia, CC BY-SA 4.0",
+  "count": 5
+ },
+ "entries": {
+  "02": [
+   {
+    "admin1": "מחוז ירושלים",
+    "note": "Jerusalem District area; the same digit is also used in the Palestinian territories under +970"
+   }
+  ],
+  "03": [
+   {
+    "admin1": "מחוז תל אביב"
+   },
+   {
+    "admin1": "מחוז המרכז",
+    "note": "Gush Dan part of the Central District (e.g. Petah Tikva, Rishon LeZion)",
+    "unverified": true
+   }
+  ],
+  "04": [
+   {
+    "admin1": "מחוז חיפה"
+   },
+   {
+    "admin1": "מחוז הצפון"
+   }
+  ],
+  "08": [
+   {
+    "admin1": "מחוז הדרום",
+    "note": "the same digit is also used in the Palestinian territories under +970"
+   },
+   {
+    "admin1": "מחוז המרכז",
+    "note": "Shephelah (lowland) part of the Central District (e.g. Rehovot, Ramla)",
+    "unverified": true
+   }
+  ],
+  "09": [
+   {
+    "admin1": "מחוז המרכז",
+    "note": "Sharon part of the Central District (e.g. Netanya, Kfar Saba)",
+    "unverified": true
+   },
+   {
+    "admin1": "מחוז תל אביב",
+    "note": "northern edge (e.g. Herzliya)",
+    "unverified": true
+   }
+  ]
+ }
+}

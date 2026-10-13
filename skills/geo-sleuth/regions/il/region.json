@@ -1,0 +1,39 @@
+{
+ "code": "IL",
+ "name": "Israel",
+ "names": [
+  "Israel",
+  "ישראל",
+  "إسرائيل",
+  "State of Israel",
+  "IL"
+ ],
+ "status": "community",
+ "maintainers": [
+  "@mstkyvz"
+ ],
+ "admin_levels": {
+  "4": "admin1"
+ },
+ "level_names": {
+  "admin1": "district (mahoz)"
+ },
+ "name_suffixes": [
+  "מחוז"
+ ],
+ "lookups": {
+  "area-code": {
+   "file": "data/area_codes.json"
+  }
+ },
+ "docs": [
+  "clues.md"
+ ],
+ "services": {
+  "poi": {
+   "sources": "osm",
+   "country": "il"
+  },
+  "street_view": "gsv.py"
+ }
+}
