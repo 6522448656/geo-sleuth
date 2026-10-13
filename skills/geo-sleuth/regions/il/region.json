@@ -13,13 +13,16 @@
   "@mstkyvz"
  ],
  "admin_levels": {
-  "4": "admin1"
+  "4": "admin1",
+  "5": "admin2"
  },
  "level_names": {
-  "admin1": "district (mahoz)"
+  "admin1": "district (mahoz)",
+  "admin2": "subdistrict (nafa)"
  },
  "name_suffixes": [
-  "מחוז"
+  "מחוז",
+  "נפת"
  ],
  "admin_table": "data/admin.json",
  "lookups": {
