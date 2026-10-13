@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow", "numpy"]
+# dependencies = ["pillow", "numpy", "pyyaml"]
 # ///
 """Offline runtime regressions. Run: uv run skills/geo-sleuth/tests/test_runtime.py"""
 from __future__ import annotations
@@ -24,11 +24,14 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import _net
 import _browser
 import baidu_pano
 import doctor
+import evidence
 import gsv
 import osm
 import poi
@@ -460,6 +463,83 @@ class FontTests(unittest.TestCase):
 
         with patch.dict(os.environ, {}, clear=True),                 patch.object(baidu_pano.ImageFont, "truetype", side_effect=fake_truetype):
             self.assertEqual(baidu_pano._font(16), "C:/Windows/Fonts/simhei.ttf")
+
+
+class SkillMetadataTests(unittest.TestCase):
+    def test_frontmatter_meets_agent_skills_spec(self):
+        root = Path(__file__).resolve().parents[1]
+        m = re.match(r"---\n(.*?)\n---\n", (root / "SKILL.md").read_text(encoding="utf-8"), re.S)
+        self.assertIsNotNone(m, "frontmatter must open and close with --- lines")
+        meta = yaml.safe_load(m.group(1))                  # strict parser: a ': ' inside the description breaks it
+        self.assertIsInstance(meta, dict)
+        self.assertEqual(meta["name"], root.name)
+        self.assertIsInstance(meta["description"], str)
+        self.assertTrue(meta["description"].strip())
+        self.assertLessEqual(len(meta["description"]), 1024)   # https://agentskills.io/specification
+
+
+class EvidenceSpecTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+        (self.base / "area.jpg").write_bytes(b"jpg")
+        (self.base / "area.json").write_text("{}", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_missing_map_is_named_instead_of_key_error(self):
+        with self.assertRaises(SystemExit) as e:
+            evidence.build({"camera": [1, 2]}, self.base, self.base / "out.jpg")
+        self.assertIn("missing 'map'", str(e.exception.code))
+
+    def test_map_without_georeference(self):
+        (self.base / "area.json").unlink()
+        self.assertIn("no georeference", evidence.check_spec({"map": "area.jpg"}, self.base)[0])
+
+    def test_item_keys_and_panel_images(self):
+        errs = evidence.check_spec({"map": "area.jpg", "labels": [{"at": [1, 2]}], "lines": [{"from": [1, 2], "bearing": 3}],
+                                    "panels": [{"image": "sv1.jpg"}]}, self.base)
+        self.assertEqual(len(errs), 3)
+        self.assertIn("labels[0] is missing 'text'", errs[0])
+        self.assertIn("lines[0] is missing 'length_m'", errs[1])
+        self.assertIn("panels[0] image not found", errs[2])
+
+    def test_valid_spec(self):
+        self.assertEqual(evidence.check_spec({"map": "area.jpg", "labels": [{"at": [1, 2], "text": "x"}]}, self.base), [])
+
+    def test_invalid_path_and_item_types_are_named(self):
+        cases = [
+            ([], "JSON object"),
+            *[({"map": value}, "'map'") for value in (None, 7, "")],
+            *[({"map": "area.jpg", key: value}, repr(key))
+              for key, value in (("labels", None), ("labels", {}), ("lines", "bad"), ("panels", None))],
+            *[({"map": "area.jpg", key: [value]}, f"{key}[0]")
+              for key, value in (("labels", None), ("labels", "at text"), ("lines", 3))],
+            ({"map": "area.jpg", "panels": [{"image": None}]}, "panels[0]"),
+        ]
+        for spec, expected in cases:
+            with self.subTest(spec=spec):
+                self.assertTrue(any(expected in error for error in evidence.check_spec(spec, self.base)))
+
+    def test_missing_files_are_reported_together(self):
+        errors = evidence.check_spec({"map": "missing.jpg", "panels": [{"image": "missing-panel.jpg"}]}, self.base)
+        self.assertEqual(len(errors), 3)
+        self.assertIn("map not found", errors[0])
+        self.assertIn("no georeference", errors[1])
+        self.assertIn("panels[0] image not found", errors[2])
+
+    def test_invalid_spec_cli_exits_without_traceback(self):
+        spec_path = self.base / "bad.json"
+        spec_path.write_text(json.dumps({"map": None, "labels": None, "panels": [{"image": None}]}), encoding="utf-8")
+        out = self.base / "out.jpg"
+        result = subprocess.run([sys.executable, str(Path(evidence.__file__)), str(spec_path), "--out", str(out)],
+                                capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(result.returncode, 1)
+        for expected in ("'map'", "'labels'", "panels[0]", "evidence.py --help"):
+            self.assertIn(expected, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse(out.exists())
 
 
 if __name__ == "__main__":
