@@ -21,6 +21,7 @@
  "name_suffixes": [
   "מחוז"
  ],
+ "admin_table": "data/admin.json",
  "lookups": {
   "area-code": {
    "file": "data/area_codes.json"

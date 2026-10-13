@@ -1,0 +1,50 @@
+{
+ "_meta": {
+  "source": [
+   "https://en.wikipedia.org/wiki/Districts_of_Israel",
+   "https://www.openstreetmap.org (boundary=administrative, admin_level=4; code = OSM relation id)"
+  ],
+  "fetched": "2026-10-13",
+  "license": "CC BY-SA 4.0 (Wikipedia) / ODbL (OpenStreetMap)",
+  "count": 6,
+  "note": "The six districts (mehozot) of 1953. The Judea and Samaria Area is administered separately and is not one of them."
+ },
+ "items": [
+  {
+   "name": "מחוז ירושלים",
+   "code": "1384720",
+   "level": 4,
+   "parent": ""
+  },
+  {
+   "name": "מחוז הצפון",
+   "code": "1375620",
+   "level": 4,
+   "parent": ""
+  },
+  {
+   "name": "מחוז חיפה",
+   "code": "1400966",
+   "level": 4,
+   "parent": ""
+  },
+  {
+   "name": "מחוז המרכז",
+   "code": "1400928",
+   "level": 4,
+   "parent": ""
+  },
+  {
+   "name": "מחוז תל אביב",
+   "code": "1400916",
+   "level": 4,
+   "parent": ""
+  },
+  {
+   "name": "מחוז הדרום",
+   "code": "1473952",
+   "level": 4,
+   "parent": ""
+  }
+ ]
+}
