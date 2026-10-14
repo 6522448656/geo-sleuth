@@ -669,6 +669,24 @@ class ImageLoadingTests(unittest.TestCase):
             self.assertEqual(got, category, f"{name}: {reason}")
         self.assertIn("export it as JPEG or PNG", self._category(self.d / "IMG_1.CR2")[1])
 
+    def test_tiff_based_raw_is_rejected_by_content(self):
+        """Structure of an iPhone ProRAW DNG: the first image is a full-size 8-bit preview marked reduced-resolution,
+        the real 10-bit linear raw sits in a SubIFD. Pillow would read the preview, whatever the suffix."""
+        from PIL import TiffImagePlugin
+        for name, tags in (("dng_named.jpg", {254: 1, 50706: b"\x01\x06\x00\x00"}), ("preview_only", {254: 1, 330: 100})):
+            info = TiffImagePlugin.ImageFileDirectory_v2()
+            for k, v in tags.items():
+                info[k] = v
+            if 50706 in tags:
+                info.tagtype[50706] = 1
+            Image.new("RGB", (40, 30), (90, 120, 150)).save(self.d / name, format="TIFF", tiffinfo=info)
+            category, reason = self._category(self.d / name)
+            self.assertEqual(category, "raw", name)
+            self.assertIn("embedded preview", reason)
+        self._save("plain.tif", "TIFF")
+        with _image.open_image(self.d / "plain.tif") as im:
+            self.assertEqual(im.format, "TIFF")
+
     def test_heif_failure_keeps_its_cause(self):
         (self.d / "x.jpg").write_bytes(HEIC_HEAD)
         with patch.object(_image, "HEIF", False):

@@ -79,6 +79,14 @@ def _head(path: Path) -> bytes:
         raise ImageReadError("unreadable", f"cannot read the file ({e.strerror or type(e).__name__})") from None
 
 
+def _tiff_is_raw(im: Image.Image) -> bool:
+    """A TIFF that is really a camera RAW: a DNG version tag, raw photometric data, or a first image marked as a
+    reduced-resolution preview with the real image in SubIFDs (Pillow would only ever read the preview)."""
+    tags = getattr(im, "tag_v2", {})
+    preview = int(tags.get(254, 0) or 0) & 1
+    return 50706 in tags or tags.get(262) in (32803, 34892) or bool(preview and 330 in tags)
+
+
 def _first_line(e: Exception) -> str:
     text = str(e).strip().splitlines()
     return f"{type(e).__name__}: {text[0]}" if text else type(e).__name__
@@ -102,8 +110,14 @@ def open_image(path: Path | str, load: bool = True) -> Image.Image:
         raise ImageReadError("missing-decoder", "AVIF, which this Pillow build cannot decode (upgrade Pillow, or convert to JPEG/PNG)")
     try:
         im = Image.open(path)
+        if im.format == "TIFF" and _tiff_is_raw(im):    # checked from the tags, before any pixels are decoded
+            im.close()
+            raise ImageReadError("raw", f"camera RAW ({path.suffix or 'no suffix'}, TIFF-based: only its embedded preview would be read), "
+                                        "which is not decoded here: export it as JPEG or PNG first")
         if load:
             im.load()
+    except ImageReadError:
+        raise
     except Exception as e:  # noqa: BLE001
         if kind is None:
             raise ImageReadError("not-image", f"not a recognised image ({_first_line(e)})") from None
