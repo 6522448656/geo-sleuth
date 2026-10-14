@@ -197,3 +197,37 @@ def open_photo(path: Path | str, what: str = "photo", recorded_size=None, record
               f"(written before orientation was applied), so it is drawn unrotated", file=sys.stderr)
         return im
     return upright(im)
+
+
+# Formats every later step and the search engines take as they are; anything else gets a working copy
+NATIVE = {"JPEG", "MPO", "PNG"}
+
+
+def working_copy_reason(im: Image.Image) -> str | None:
+    """Why a photo needs a working copy, or None: a format outside NATIVE, or an EXIF orientation still to apply."""
+    if im.format not in NATIVE:
+        return f"{'HEIC/HEIF' if im.format == 'HEIF' else im.format} decoded to PNG"
+    o = orientation(im)
+    return f"EXIF orientation {o} applied" if o != 1 else None
+
+
+def write_working_copy(path: Path | str, out: Path | str) -> dict | None:
+    """Lossless upright PNG of a photo that needs one (see working_copy_reason), with the original's EXIF kept
+    (focal length, time, GPS) and its orientation tag reset. Returns None for photos used as they are; raises
+    ImageReadError for unreadable ones. The original file is never touched."""
+    path, out = Path(path), Path(out)
+    im = open_image(path)
+    why = working_copy_reason(im)
+    if why is None:
+        return None
+    up = upright(im)
+    if up.mode not in ("RGB", "RGBA", "L", "LA"):
+        up = up.convert("RGBA" if "A" in up.getbands() else "RGB")
+    exif = im.getexif()
+    if ORIENTATION in exif:
+        exif[ORIENTATION] = 1
+    out.parent.mkdir(parents=True, exist_ok=True)
+    extra = {"icc_profile": im.info["icc_profile"]} if im.info.get("icc_profile") else {}
+    up.save(out, format="PNG", exif=exif, **extra)
+    return {"original": str(path), "working": str(out), "reason": why, "format": im.format,
+            "original_size": list(im.size), "working_size": list(up.size)}

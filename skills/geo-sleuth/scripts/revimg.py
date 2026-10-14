@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import argparse
 from _browser import launch_browser
-from _image import ImageReadError, open_image, upright
+from _image import ImageReadError, open_image, upright, write_working_copy
 from _net import fetch_bytes, PROXY_HELP
 import asyncio
 import io
@@ -246,6 +246,16 @@ async def _text(ctx, engine: str, query: str, shot: Path) -> dict:
     return res
 
 
+def _upload_path(img: Path, out_dir: Path) -> Path:
+    """Search engines take JPEG and PNG as stored. A HEIC, WebP, ... or a photo with an EXIF orientation still to
+    apply is uploaded as an upright lossless PNG copy in out_dir/upload/; everything else as it is."""
+    try:
+        info = write_working_copy(img, out_dir / "upload" / f"{img.stem}.png")
+    except ImageReadError:
+        return img
+    return Path(info["working"]) if info else img
+
+
 async def run(images: list[Path], engines: list[str], out_dir: Path, proxy: str | None,
               queries: list[str] | None = None, text_engines: list[str] | None = None,
               similar_pages: int = 2, sheet_n: int = 24) -> list[dict]:
@@ -273,6 +283,7 @@ async def run(images: list[Path], engines: list[str], out_dir: Path, proxy: str 
                     results.append(res)
             await b.close()
 
+        uploads = [_upload_path(i, out_dir) for i in images] if engines else []
         for eng in engines if images else []:
             b = await browser()
             ctx = await b.new_context(viewport={"width": 1400, "height": 1000},
@@ -282,10 +293,13 @@ async def run(images: list[Path], engines: list[str], out_dir: Path, proxy: str 
                 name = img.stem if stems.count(img.stem) == 1 else f"{k + 1:02d}_{img.stem}"
                 shot = out_dir / f"{name}_{eng}.png"
                 try:
-                    res = await (_baidu(ctx, img, shot, similar_pages, sheet_n, proxy) if eng == "baidu" else _yandex(ctx, img, shot))
+                    up = uploads[k]
+                    res = await (_baidu(ctx, up, shot, similar_pages, sheet_n, proxy) if eng == "baidu" else _yandex(ctx, up, shot))
                 except Exception as e:  # noqa: BLE001
                     res = {"error": str(e)[:300]}
                 res.update({"image": str(img), "engine": eng, "screenshot": str(shot)})
+                if uploads[k] != img:
+                    res["uploaded"] = str(uploads[k])
                 (out_dir / f"{name}_{eng}.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
                 results.append(res)
             await b.close()

@@ -962,5 +962,158 @@ class OrientationTests(unittest.TestCase):
             self.assertEqual(Image.open(self.d / f"r_{name}.png").tobytes(), Image.open(self.d / "r_up.png").tobytes(), name)
 
 
+class WorkingCopyTests(unittest.TestCase):
+    """Stage 3 of #29: a lossless upright PNG only for photos that need one, original EXIF kept, uploads compatible."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.control = upright_control()
+
+    def _exif(self, o):
+        ex = Image.Exif()
+        ex[0x0112] = o
+        ex[0x8769] = {0xA405: 26}                         # FocalLengthIn35mmFilm
+        return ex
+
+    def test_native_upright_photos_are_used_as_they_are(self):
+        self.control.save(self.d / "a.jpg", exif=self._exif(1))
+        self.control.save(self.d / "b.png")
+        self.assertIsNone(_image.write_working_copy(self.d / "a.jpg", self.d / "w" / "a.png"))
+        self.assertIsNone(_image.write_working_copy(self.d / "b.png", self.d / "w" / "b.png"))
+        self.assertFalse((self.d / "w").exists())
+
+    def test_oriented_jpeg_gets_an_upright_png_with_its_exif(self):
+        stored_as(self.control, 6).save(self.d / "o6.jpg", exif=self._exif(6), quality=95)
+        before = (self.d / "o6.jpg").read_bytes()
+        info = _image.write_working_copy(self.d / "o6.jpg", self.d / "w" / "o6.png")
+        self.assertEqual((self.d / "o6.jpg").read_bytes(), before)               # original untouched
+        self.assertEqual(info["reason"], "EXIF orientation 6 applied")
+        self.assertEqual((info["original_size"], info["working_size"]), ([40, 60], [60, 40]))
+        with Image.open(info["working"]) as wc:
+            self.assertEqual(wc.format, "PNG")
+            self.assertEqual(wc.tobytes(), _image.open_photo(self.d / "o6.jpg").convert("RGB").tobytes())   # lossless
+            self.assertEqual(wc.getexif().get(0x0112), 1)
+            self.assertEqual(wc.getexif().get_ifd(0x8769).get(0xA405), 26)
+            self.assertIsNone(_image.working_copy_reason(wc))                  # a copy never needs another
+
+    def test_webp_and_heic_get_a_copy(self):
+        self.control.save(self.d / "w.webp", exif=self._exif(1))
+        self.assertEqual(_image.write_working_copy(self.d / "w.webp", self.d / "w" / "w.png")["reason"], "WEBP decoded to PNG")
+        if _image.HEIF:
+            self.control.save(self.d / "h.heic", format="HEIF", exif=self._exif(1))
+            info = _image.write_working_copy(self.d / "h.heic", self.d / "w" / "h.png")
+            self.assertEqual(info["reason"], "HEIC/HEIF decoded to PNG")
+            with Image.open(info["working"]) as wc:
+                self.assertEqual(wc.getexif().get_ifd(0x8769).get(0xA405), 26)
+
+    def test_unreadable_photo_raises(self):
+        (self.d / "IMG.CR2").write_bytes(b"II*\x00\x10\x00\x00\x00CR\x02\x00" + b"\x00" * 64)
+        with self.assertRaises(_image.ImageReadError):
+            _image.write_working_copy(self.d / "IMG.CR2", self.d / "w" / "IMG.png")
+
+    def test_revimg_uploads_a_compatible_copy_only_when_needed(self):
+        import revimg
+        self.control.save(self.d / "plain.jpg")
+        stored_as(self.control, 8).save(self.d / "side.jpg", exif=self._exif(8))
+        self.assertEqual(revimg._upload_path(self.d / "plain.jpg", self.d / "rev"), self.d / "plain.jpg")
+        up = revimg._upload_path(self.d / "side.jpg", self.d / "rev")
+        self.assertEqual(up, self.d / "rev" / "upload" / "side.png")
+        with Image.open(up) as im:
+            self.assertEqual(im.size, (60, 40))
+
+
+class IntakeStatusTests(unittest.TestCase):
+    """intake.py as a whole: working-copy routing, partial results, exit status. Child scripts run for real, with this Python."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def _intake(self, photo, *extra, fail=()):
+        import intake
+        original = intake._run
+
+        def run(cmd, **kwargs):
+            name = Path(str(cmd[2])).name
+            if name in fail:
+                return 1, "", f"{name}: simulated failure"
+            return original([sys.executable, *cmd[2:]], **kwargs)
+
+        out = self.d / "out"
+        code = 0
+        with patch.object(intake, "_run", side_effect=run), \
+                patch.object(sys, "argv", ["intake.py", str(photo), "--out-dir", str(out), "--no-rev", *extra]), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                intake.main()
+            except SystemExit as e:
+                code = e.code if isinstance(e.code, int) else 1
+        return code, out, json.loads((out / "intake.json").read_text(encoding="utf-8")), (out / "intake.md").read_text(encoding="utf-8")
+
+    def test_ordinary_photo_uses_the_original(self):
+        upright_control(120, 80).save(self.d / "photo.jpg")
+        code, out, js, md = self._intake(self.d / "photo.jpg", "--no-ocr")
+        self.assertEqual((code, js["result"], js["input"]), (0, "ok", None))
+        self.assertFalse((out / "work").exists())
+        self.assertTrue((out / "edges" / "photo_top.jpg").exists())
+        self.assertNotIn("Result:", md)
+
+    def test_oriented_photo_is_routed_through_an_upright_copy(self):
+        upright_control(120, 80).save(self.d / "photo.png")
+        _, out, _, _ = self._intake(self.d / "photo.png", "--no-ocr")
+        control = {f.name: f.read_bytes() for f in (out / "edges").glob("*.jpg")}
+        (self.d / "out").rename(self.d / "out_control")
+        save_oriented(upright_control(120, 80), 6, self.d / "photo.png")
+        code, out, js, md = self._intake(self.d / "photo.png", "--no-ocr")
+        self.assertEqual(code, 0)
+        self.assertEqual(js["input"]["reason"], "EXIF orientation 6 applied")
+        self.assertTrue((out / "work" / "photo.png").exists())
+        got = {f.name: f.read_bytes() for f in (out / "edges").glob("*.jpg")}
+        self.assertEqual(len(control), 8)
+        self.assertEqual(got, control)                       # same names, same upright crops as the upright control
+        self.assertIn("keep passing the original photo", md)
+
+    @unittest.skipUnless(_image.HEIF, "pillow-heif not installed")
+    def test_heic_photo_runs_every_step_with_metadata_from_the_original(self):
+        ex = Image.Exif()
+        ex[0x8769] = {0xA405: 24}
+        upright_control(120, 80).save(self.d / "IMG_1.HEIC", format="HEIF", exif=ex)
+        code, out, js, _ = self._intake(self.d / "IMG_1.HEIC", "--no-ocr")
+        self.assertEqual((code, js["result"]), (0, "ok"))
+        self.assertEqual(js["input"]["reason"], "HEIC/HEIF decoded to PNG")
+        self.assertEqual(len(list((out / "edges").glob("IMG_1_*.jpg"))), 8)
+        self.assertEqual(js["exif"]["file"], str((self.d / "IMG_1.HEIC").resolve()))
+
+    def test_partial_failure_is_reported_as_partial(self):
+        upright_control(120, 80).save(self.d / "photo.jpg")
+        code, _, js, md = self._intake(self.d / "photo.jpg", fail=("ocr.py",))
+        self.assertEqual((code, js["result"]), (0, "partial"))
+        self.assertIn("**Result: partial.** Failed: ocr", md)
+
+    def test_all_visual_steps_failing_exits_nonzero_and_keeps_the_report(self):
+        upright_control(120, 80).save(self.d / "photo.jpg")
+        code, _, js, md = self._intake(self.d / "photo.jpg", fail=("imgprep.py", "ocr.py"))
+        self.assertEqual((code, js["result"]), (1, "failed"))
+        self.assertIn("**Result: failed.**", md)
+        self.assertEqual(js["status"]["exif"], "ok")
+
+    def test_disabled_step_is_not_a_failure(self):
+        upright_control(120, 80).save(self.d / "photo.jpg")
+        code, _, js, _ = self._intake(self.d / "photo.jpg", "--no-ocr", fail=("ocr.py",))
+        self.assertEqual((code, js["result"]), (0, "ok"))
+        self.assertNotIn("ocr", js["status"])
+
+    def test_unreadable_photo_exits_2_with_a_report(self):
+        (self.d / "IMG_2.CR2").write_bytes(b"II*\x00\x10\x00\x00\x00CR\x02\x00" + b"\x00" * 64)
+        code, out, js, md = self._intake(self.d / "IMG_2.CR2")
+        self.assertEqual(code, 2)
+        self.assertEqual((js["result"], js["input"]["error"]), ("input unreadable", "raw"))
+        self.assertIn("export it as JPEG or PNG", md)
+        self.assertFalse(any((out / "edges").glob("*")))
+
+
 if __name__ == "__main__":
     unittest.main()
