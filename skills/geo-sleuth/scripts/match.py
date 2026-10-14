@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow", "numpy", "torch", "transformers", "opencv-python-headless", "socksio", "pysocks", "requests"]
+# dependencies = ["pillow", "pillow-heif", "numpy", "torch", "transformers", "opencv-python-headless", "socksio", "pysocks", "requests"]
 # ///
 """Similarity ranking of a photo against a batch of candidate real-scene images (street-view renders, satellite thumbnails, reference images): the machine ranks first, you look only at the top few.
 
@@ -52,6 +52,13 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).parent))
 import geo  # noqa: E402
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    HEIF = True
+except ImportError:  # without pillow-heif, HEIC candidates are skipped with a reason; other formats work as usual
+    HEIF = False
 
 MODELS = {"dino": "facebook/dinov2-small", "clip": "openai/clip-vit-base-patch32"}
 
@@ -211,7 +218,9 @@ def _why_unreadable(f: Path, err: Exception) -> str:
     if not head:
         return "empty file"
     if head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"heif", b"mif1", b"msf1"):
-        return "HEIC/HEIF, which Pillow cannot decode (convert to JPEG first)"
+        if HEIF:
+            return "HEIC/HEIF that pillow-heif could not decode (damaged or truncated)"
+        return "HEIC/HEIF, which needs pillow-heif (run with uv run, or convert to JPEG first)"
     if head[4:8] == b"ftyp" and head[8:12] in (b"avif", b"avis"):
         return "AVIF, which this Pillow build cannot decode (convert to JPEG first)"
     if head.lstrip()[:1] in (b"<", b"{"):

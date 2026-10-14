@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow", "numpy", "pyyaml"]
+# dependencies = ["pillow", "pillow-heif", "numpy", "pyyaml"]
 # ///
 """Offline runtime regressions. Run: uv run skills/geo-sleuth/tests/test_runtime.py"""
 from __future__ import annotations
@@ -651,6 +651,23 @@ class MatchImageLoadingTests(unittest.TestCase):
             items, ims = match._load_candidates(args)
         self.assertEqual([it["id"] for it in items], ["first", "last"])
         self.assertEqual([im.getpixel((0, 0))[2] > 128 for im in ims], [False, True])
+
+    @unittest.skipUnless(match.HEIF, "pillow-heif not installed")
+    def test_heic_saved_as_jpg_is_decoded(self):
+        self._jpeg("a.jpg")
+        Image.new("RGB", (40, 30), (0, 0, 255)).save(self.d / "phone.jpg", format="HEIF")
+        self.assertEqual((self.d / "phone.jpg").read_bytes()[4:12], b"ftypheic")
+        ok, ims, err = self._load(sorted(self.d.glob("*.jpg")))
+        self.assertEqual([f.name for f in ok], ["a.jpg", "phone.jpg"])
+        self.assertEqual(ims[1].size, (40, 30))
+        self.assertGreater(ims[1].getpixel((0, 0))[2], 200)
+        self.assertEqual(err, "")
+
+    def test_heic_reason_depends_on_pillow_heif(self):
+        (self.d / "x.jpg").write_bytes(b"\x00\x00\x00\x1cftypheic" + b"\x00" * 64)
+        for available, expected in ((True, "could not decode"), (False, "needs pillow-heif")):
+            with patch.object(match, "HEIF", available):
+                self.assertIn(expected, match._why_unreadable(self.d / "x.jpg", OSError()))
 
 
 if __name__ == "__main__":
