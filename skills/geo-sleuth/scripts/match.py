@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow", "numpy", "torch", "transformers", "opencv-python-headless", "socksio", "pysocks", "requests"]
+# dependencies = ["pillow", "pillow-heif", "numpy", "torch", "transformers", "opencv-python-headless", "socksio", "pysocks", "requests"]
 # ///
 """Similarity ranking of a photo against a batch of candidate real-scene images (street-view renders, satellite thumbnails, reference images): the machine ranks first, you look only at the top few.
 
@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 from _device import torch_device
+from _image import ImageReadError, find_images, open_image, open_photo, upright
 from _net import PROXY_HELP
 from _net import model_proxy_env
 import glob
@@ -201,33 +202,15 @@ def _render_items(items: list[dict], engine: str, proxy: str | None, cache: Path
         return list(ex.map(one, items))
 
 
-def _why_unreadable(f: Path, err: Exception) -> str:
-    """Short reason a candidate file could not be decoded, for the skip summary."""
-    try:
-        with open(f, "rb") as fh:
-            head = fh.read(16)
-    except OSError:
-        return "unreadable file"
-    if not head:
-        return "empty file"
-    if head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"heif", b"mif1", b"msf1"):
-        return "HEIC/HEIF, which Pillow cannot decode (convert to JPEG first)"
-    if head[4:8] == b"ftyp" and head[8:12] in (b"avif", b"avis"):
-        return "AVIF, which this Pillow build cannot decode (convert to JPEG first)"
-    if head.lstrip()[:1] in (b"<", b"{"):
-        return "text, not an image (probably an error page saved by a download)"
-    return type(err).__name__
-
-
 def _open_images(files: list[Path]) -> tuple[list[Path], list[Image.Image]]:
-    """Decode every candidate up front; skip the files Pillow cannot read and say why, instead of failing mid-run."""
+    """Decode every candidate up front; skip the files that can't be read as a supported image and say why, instead of failing mid-run."""
     ok, ims, bad = [], [], []
     for f in files:
         try:
-            im = Image.open(f)
-            im.load()
-        except Exception as e:  # noqa: BLE001
-            bad.append((f, _why_unreadable(f, e)))
+            im = upright(open_image(f))
+        except ImageReadError as e:
+            # group by reason; for decode errors drop the exception detail so one cause stays one line
+            bad.append((f, e.reason.split(" (")[0] if e.category in ("decode-error", "not-image") else e.reason))
             continue
         ok.append(f)
         ims.append(im)
@@ -246,7 +229,7 @@ def _load_candidates(args) -> tuple[list[dict], list[Image.Image]]:
     cache = Path(args.cache)
     if args.images:
         p = Path(args.images)
-        files = sorted(p.glob("*.jp*g")) + sorted(p.glob("*.png")) if p.is_dir() else [Path(x) for x in sorted(glob.glob(args.images))]
+        files = find_images(p) if p.is_dir() else [Path(x) for x in sorted(glob.glob(args.images))]
         if not files:
             sys.exit(f"--images has no images: {args.images}")
         files, ims = _open_images(files)
@@ -302,7 +285,7 @@ def _sheet(rows: list[dict], ims: dict, out: Path, cols: int = 3, tw: int = 480,
 
 def cmd_rank(args) -> None:
     _proxy_env(args.proxy)
-    q = Image.open(args.query)
+    q = open_photo(args.query, "query")
     if args.query_box:
         x0, y0, x1, y1 = (int(float(v)) for v in args.query_box.split(","))
         q = q.crop((x0, y0, x1, y1))
@@ -357,7 +340,7 @@ def cmd_rank(args) -> None:
 def cmd_index(args) -> None:
     _proxy_env(args.proxy)
     p = Path(args.images)
-    files = sorted(p.glob("*.jp*g")) + sorted(p.glob("*.png")) if p.is_dir() else [Path(x) for x in sorted(glob.glob(args.images))]
+    files = find_images(p) if p.is_dir() else [Path(x) for x in sorted(glob.glob(args.images))]
     if not files:
         sys.exit(f"--images has no images: {args.images}")
     files, ims = _open_images(files)
