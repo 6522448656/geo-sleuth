@@ -16,6 +16,7 @@ Level shots (standing on the ground photographing a distant tower, bridge, pier)
 
 spec.json format:
 {
+  "frame": "upright",
   "image_size": [1476, 827],
   "points": [
     {"name": "bridgehead", "px": [212, 431], "ll": [lat, lon], "h": 470},
@@ -24,9 +25,10 @@ spec.json format:
   "init": {"at": [lat, lon], "height": 560, "heading": 190, "pitch": -8, "hfov": 65},
   "fix": ["hfov"]
 }
-- px: pixel coordinates of the point in the photo as an image viewer shows it (EXIF orientation applied, top-left is 0,0); imgprep.py and ocr.py outputs use the same frame.
-  A spec measured on the stored, unrotated pixels of a photo with an EXIF orientation (older specs may be) adds "frame": "stored";
-  the solved pose.json keeps the frame in _frame, and `project` draws in it. A pose.json without one predates this and is read as "stored".
+- frame: "upright" for new specs measured on the photo as a viewer shows it (EXIF orientation applied), matching imgprep.py and ocr.py.
+  "stored" uses the unrotated stored pixels. Specs without this key keep the legacy "stored" frame when solved again.
+  The solved pose.json keeps the frame in _frame, and `project` draws in it; a pose.json without the key also uses "stored".
+- px and image_size: pixel coordinates and full photo size in the declared frame (top-left is 0,0).
 - h: height of the point, **on the same datum as the camera height**. Using elevation above sea level throughout is the most reliable: ground points via `terrain.py elev`, rooftop = ground elevation + building height.
 - init: rough camera position and heading; if unknown, give the center of the candidate area, and --restarts will start from multiple points within --search-radius.
 - fix: parameters that can be fixed (hfov, roll, height); if you know the focal length, fix hfov; more stable with few points.
@@ -169,7 +171,7 @@ def solve(spec: dict, search_radius: float, restarts: int, seed: int = 7,
     else:
         out["sigma"] = "zero degrees of freedom, can't estimate the error; add more points"
     out["_params"] = [float(x) for x in p]
-    out["_frame"] = {"lat0": lat0, "lon0": lon0, "image_size": [W, H], "frame": frame_of(spec, "upright")}
+    out["_frame"] = {"lat0": lat0, "lon0": lon0, "image_size": [W, H], "frame": frame_of(spec)}
     mc = mc_radius(p, free, pts, obs, W, H, pt_sigma, rms)
     out["radius_m"] = mc["radius_m"]
     out["radius_note"] = (f"95% radius, Monte Carlo {mc['trials']} trials: control-point coordinates perturbed by ±{pt_sigma:g} m"

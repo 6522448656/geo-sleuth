@@ -893,7 +893,7 @@ class OrientationTests(unittest.TestCase):
     def test_frames_are_read_from_the_record_not_guessed_from_the_size(self):
         self.assertEqual(_image.frame_of({}), "stored")                     # written before orientation was applied
         self.assertEqual(_image.frame_of({"frame": "upright"}), "upright")
-        self.assertEqual(_image.frame_of({}, "upright"), "upright")         # an agent-written spec defaults to upright
+        self.assertEqual(_image.frame_of({}, "upright"), "upright")         # callers can explicitly override the default
         with self.assertRaises(SystemExit):
             _image.frame_of({"frame": "sideways"})
         for control in (self.control, upright_control(40, 40)):              # square: no size tells the frames apart
@@ -986,18 +986,58 @@ class OrientationTests(unittest.TestCase):
                 self.assertIn(f"EXIF orientation {o}", err)
                 self.assertNotIn("warning", err)
 
-    def test_pose_solve_records_the_frame_of_its_points(self):
-        lat0, lon0, W, H = 30.0, 120.0, 400, 300
+    def _pose_spec(self, W=400, H=300):
+        lat0, lon0 = 30.0, 120.0
         kx, ky = pose._frame(lat0)
         truth = np.array([3.0, -4.0, 12.0, 20.0, -2.0, 0.0, 350.0])
         enu = np.array([[-60, 220, 0], [40, 260, 25], [90, 180, 5], [-20, 140, 15], [10, 320, 40], [-90, 300, 8]], float)
         uv, _ = pose.project(truth, enu, W, H)
-        spec = {"image_size": [W, H], "init": {"at": [lat0, lon0], "height": 10, "heading": 15, "pitch": 0, "hfov": 60},
+        return {"image_size": [W, H], "init": {"at": [lat0, lon0], "height": 10, "heading": 15, "pitch": 0, "hfov": 60},
                 "points": [{"name": f"P{i}", "ll": [lat0 + n / ky, lon0 + e / kx], "h": u, "px": [float(x), float(y)]}
                            for i, ((e, n, u), (x, y)) in enumerate(zip(enu, uv))]}
+    def test_pose_solve_records_the_frame_of_its_points(self):
+        spec = self._pose_spec()
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(pose.solve(spec, 50, 2)["_frame"]["frame"], "upright")
+            self.assertEqual(pose.solve(spec, 50, 2)["_frame"]["frame"], "stored")
             self.assertEqual(pose.solve(dict(spec, frame="stored"), 50, 2)["_frame"]["frame"], "stored")
+            self.assertEqual(pose.solve(dict(spec, frame="upright"), 50, 2)["_frame"]["frame"], "upright")
+
+    def _solve_photo(self, spec, photo, name):
+        source, saved, overlay = (self.d / f"{name}{suffix}" for suffix in ("_spec.json", "_pose.json", ".png"))
+        source.write_text(json.dumps(spec), encoding="utf-8")
+        self._run("pose.py", "solve", source, "--photo", photo, "--out", overlay, "--save", saved,
+                  "--search-radius", 50, "--restarts", 2)
+        with Image.open(overlay) as im:
+            pixels = im.tobytes()
+        return json.loads(saved.read_text(encoding="utf-8")), pixels
+
+    def test_legacy_pose_specs_solve_in_the_stored_frame(self):
+        """Re-running an old input spec must preserve its overlay, not just reading an old solved pose.json."""
+        for w, h, o in ((400, 300, 3), (400, 300, 6), (300, 300, 6)):
+            with self.subTest(size=(w, h), orientation=o):
+                scene = upright_control(w, h)
+                stored = stored_as(scene, o)
+                stored.save(self.d / "plain.png")
+                save_oriented(scene, o, self.d / "oriented.png")
+                spec = self._pose_spec(*stored.size)                         # legacy input: no frame key
+                before, control = self._solve_photo(spec, self.d / "plain.png", "legacy_control")
+                after, actual = self._solve_photo(spec, self.d / "oriented.png", "legacy_oriented")
+                self.assertEqual(after["_frame"]["frame"], "stored")
+                self.assertEqual(after["_params"], before["_params"])
+                self.assertEqual(actual, control)
+
+    def test_new_pose_specs_solve_in_the_upright_frame(self):
+        scene = upright_control(400, 300)
+        scene.save(self.d / "upright.png")
+        spec = dict(self._pose_spec(), frame="upright")
+        before, control = self._solve_photo(spec, self.d / "upright.png", "upright_control")
+        for o in (3, 6):
+            with self.subTest(orientation=o):
+                save_oriented(scene, o, self.d / "oriented.png")
+                after, actual = self._solve_photo(spec, self.d / "oriented.png", "upright_oriented")
+                self.assertEqual(after["_frame"]["frame"], "upright")
+                self.assertEqual(after["_params"], before["_params"])
+                self.assertEqual(actual, control)
 
     def test_terrain_ridge_points_and_overlay_use_the_upright_frame(self):
         w, h = 240, 160
