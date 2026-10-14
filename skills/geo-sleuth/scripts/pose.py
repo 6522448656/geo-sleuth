@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow", "numpy"]
+# dependencies = ["pillow", "pillow-heif", "numpy"]
 # ///
 """Solve the camera position (camera resection): ≥4 points in the photo whose locations you can identify → camera lat/lon, height, heading, pitch, roll, field of view + error radius.
 
@@ -37,6 +37,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+from _image import open_or_exit
 import json
 import math
 import re
@@ -319,7 +320,7 @@ def sanity(pose: dict, pts: list[dict], horizon_row: float | None = None) -> lis
 
 
 def draw(photo: Path, pose: dict, pts: list[dict], out: Path, observed: bool) -> None:
-    im = Image.open(photo).convert("RGB")
+    im = open_or_exit(photo, "photo").convert("RGB")
     W, H = pose["_frame"]["image_size"]
     sx, sy = im.width / W, im.height / H
     lat0, lon0 = pose["_frame"]["lat0"], pose["_frame"]["lon0"]

@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import _net
 import _browser
 import _device
+import _image
 import match
 import baidu_pano
 import doctor
@@ -602,14 +603,129 @@ class DeviceTests(unittest.TestCase):
             self.assertNotIn("mps.is_available", text)
 
 
+HEIC_HEAD = b"\x00\x00\x00\x1cftypheic" + b"\x00" * 64
+
+
+class ImageLoadingTests(unittest.TestCase):
+    """scripts/_image.py: explicit formats, content sniffing, RAW rejection, failure categories, folder discovery."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def _save(self, name, fmt="JPEG", color=(200, 30, 30), size=(32, 24)):
+        Image.new("RGB", size, color).save(self.d / name, format=fmt)
+        return self.d / name
+
+    def _category(self, path):
+        with self.assertRaises(_image.ImageReadError) as caught:
+            _image.open_image(path)
+        self.assertEqual(len(caught.exception.reason.splitlines()), 1)
+        return caught.exception.category, caught.exception.reason
+
+    def test_sniff_reads_content_not_suffix(self):
+        heads = {
+            "JPEG": b"\xff\xd8\xff\xe0", "PNG": b"\x89PNG\r\n\x1a\n", "WEBP": b"RIFF\x00\x00\x00\x00WEBPVP8 ",
+            "GIF": b"GIF89a", "HEIF": HEIC_HEAD[:16], "AVIF": b"\x00\x00\x00\x1cftypavif", "TIFF": b"II*\x00\x08\x00\x00\x00",
+            "TEXT": b'{"status":400}',
+        }
+        for kind, head in heads.items():
+            self.assertEqual(_image.sniff(head, ".jpg"), kind)
+        self.assertEqual(_image.sniff(b"II*\x00\x10\x00\x00\x00CR\x02\x00", ".jpg"), "RAW")      # Canon CR2
+        self.assertEqual(_image.sniff(b"\x00\x00\x00\x18ftypcrx ", ".cr3"), "RAW")               # Canon CR3
+        self.assertEqual(_image.sniff(b"MM\x00*\x00\x00\x00\x08", ".NEF"), "RAW")               # TIFF-based RAW by suffix
+        self.assertEqual(_image.sniff(b"FUJIFILMCCD-RAW 0201", ".raf"), "RAW")
+        self.assertIsNone(_image.sniff(b"\x00\x01\x02\x03", ".jpg"))
+
+    def test_supported_formats_open_whatever_the_suffix(self):
+        for name, fmt in (("a.jpg", "JPEG"), ("b.png", "PNG"), ("c.webp", "WEBP"), ("d.jpg", "PNG"), ("e", "JPEG"), ("f.gif", "GIF")):
+            with _image.open_image(self._save(name, fmt)) as im:
+                self.assertEqual((im.format, im.size), (fmt, (32, 24)))
+
+    @unittest.skipUnless(_image.HEIF, "pillow-heif not installed")
+    def test_heic_decodes_and_keeps_metadata(self):
+        ex = Image.Exif()
+        ex[0x8769] = {0xA405: 26}                       # FocalLengthIn35mmFilm
+        Image.new("RGB", (40, 30), (0, 0, 255)).save(self.d / "phone.heic", format="HEIF", exif=ex)
+        im = _image.open_image(self.d / "phone.heic")
+        self.assertEqual((im.format, im.size), ("HEIF", (40, 30)))
+        self.assertGreater(im.getpixel((0, 0))[2], 200)
+        self.assertEqual(im.getexif().get_ifd(0x8769).get(0xA405), 26)
+
+    def test_failure_categories(self):
+        (self.d / "empty.jpg").write_bytes(b"")
+        (self.d / "error.jpg").write_bytes(b'{"status":400,"msg":"bad"}')
+        (self.d / "noise.jpg").write_bytes(b"\x00\x01\x02\x03" * 20)
+        (self.d / "IMG_1.CR2").write_bytes(b"II*\x00\x10\x00\x00\x00CR\x02\x00" + b"\x00" * 64)
+        (self.d / "IMG_2.dng").write_bytes(b"II*\x00\x08\x00\x00\x00" + b"\x00" * 64)
+        full = self._save("full.jpg").read_bytes()
+        (self.d / "cut.jpg").write_bytes(full[: len(full) // 2])
+        Image.new("RGB", (8, 8)).save(self.d / "frame.ppm", format="PPM")
+        expect = {"empty.jpg": "empty", "error.jpg": "not-image", "noise.jpg": "not-image", "IMG_1.CR2": "raw",
+                  "IMG_2.dng": "raw", "cut.jpg": "decode-error", "frame.ppm": "unsupported"}
+        for name, category in expect.items():
+            got, reason = self._category(self.d / name)
+            self.assertEqual(got, category, f"{name}: {reason}")
+        self.assertIn("export it as JPEG or PNG", self._category(self.d / "IMG_1.CR2")[1])
+
+    def test_heif_failure_keeps_its_cause(self):
+        (self.d / "x.jpg").write_bytes(HEIC_HEAD)
+        with patch.object(_image, "HEIF", False):
+            self.assertEqual(self._category(self.d / "x.jpg")[0], "missing-decoder")
+        if _image.HEIF:
+            category, reason = self._category(self.d / "x.jpg")
+            self.assertEqual(category, "decode-error")
+            self.assertIn("HEIF that could not be decoded (", reason)     # the decoder's own message, not a guess
+
+    def test_find_images_keeps_old_order_then_adds_new_formats(self):
+        for name, fmt in (("b.jpg", "JPEG"), ("a.jpeg", "JPEG"), ("c.png", "PNG"), ("d.webp", "WEBP"),
+                          ("e.HEIC", "PNG"), ("f.heif", "PNG"), ("g.bin", "PNG"), ("h", "JPEG")):
+            self._save(name, fmt)
+        (self.d / "notes.json").write_text("{}", encoding="utf-8")
+        (self.d / "readme.txt").write_text("hello", encoding="utf-8")
+        (self.d / "IMG_3.CR2").write_bytes(b"II*\x00\x10\x00\x00\x00CR\x02\x00")
+        names = [f.name for f in _image.find_images(self.d)]
+        old = sorted(["b.jpg", "a.jpeg"]) + ["c.png"]
+        self.assertEqual(names[:3], old)
+        self.assertEqual(sorted(names[3:]), sorted(["d.webp", "e.HEIC", "f.heif", "IMG_3.CR2", "g.bin", "h"]))
+        self.assertNotIn("notes.json", names)
+        self.assertNotIn("readme.txt", names)
+
+    def test_open_or_exit_is_one_line(self):
+        (self.d / "IMG_4.NEF").write_bytes(b"MM\x00*\x00\x00\x00\x08" + b"\x00" * 64)
+        with self.assertRaises(SystemExit) as caught:
+            _image.open_or_exit(self.d / "IMG_4.NEF", "photo")
+        message = str(caught.exception.code)
+        self.assertEqual(len(message.splitlines()), 1)
+        self.assertIn("cannot read photo", message)
+        self.assertIn("export it as JPEG or PNG", message)
+
+    def test_photo_scripts_exit_cleanly_on_raw_and_read_heic(self):
+        script = Path(_image.__file__).with_name("imgprep.py")
+        raw = self.d / "IMG_5.ARW"
+        raw.write_bytes(b"II*\x00\x08\x00\x00\x00" + b"\x00" * 64)
+        r = subprocess.run([sys.executable, str(script), "zoom", str(raw), "--box", "0,0,4,4", "--out", str(self.d / "z.png")],
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn("export it as JPEG or PNG", r.stderr)
+        if _image.HEIF:
+            Image.new("RGB", (40, 30), (0, 200, 0)).save(self.d / "p.heic", format="HEIF")
+            r = subprocess.run([sys.executable, str(script), "zoom", str(self.d / "p.heic"), "--box", "0,0,20,20", "--out", str(self.d / "z.png")],
+                               capture_output=True, text=True, encoding="utf-8")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertTrue((self.d / "z.png").exists())
+
+
 class MatchImageLoadingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.d = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
 
-    def _jpeg(self, name, color=(200, 30, 30)):
-        Image.new("RGB", (32, 24), color).save(self.d / name, quality=90)
+    def _save(self, name, fmt="JPEG", color=(200, 30, 30)):
+        Image.new("RGB", (32, 24), color).save(self.d / name, format=fmt)
 
     def _load(self, files):
         err = io.StringIO()
@@ -618,56 +734,68 @@ class MatchImageLoadingTests(unittest.TestCase):
         return ok, ims, err.getvalue()
 
     def test_unreadable_files_are_skipped_with_reasons(self):
-        self._jpeg("a.jpg")
-        self._jpeg("b.jpg", (30, 200, 30))
-        (self.d / "heic.jpg").write_bytes(b"\x00\x00\x00\x1cftypheic" + b"\x00" * 64)
+        self._save("a.jpg")
+        self._save("b.jpg", color=(30, 200, 30))
+        (self.d / "heic.jpg").write_bytes(HEIC_HEAD)
         (self.d / "error.jpg").write_bytes('{"status":400,"msg":"bad"}'.encode())
         (self.d / "empty.jpg").write_bytes(b"")
         full = (self.d / "a.jpg").read_bytes()
         (self.d / "cut.jpg").write_bytes(full[: len(full) // 2])
-        files = sorted(self.d.glob("*.jpg"))
-        ok, ims, err = self._load(files)
+        ok, ims, err = self._load(sorted(self.d.glob("*.jpg")))
         self.assertEqual([f.name for f in ok], ["a.jpg", "b.jpg"])
         self.assertEqual([im.size for im in ims], [(32, 24), (32, 24)])
         self.assertEqual(len(err.strip().splitlines()), 1)
         self.assertIn("skipped 4 of 6 files", err)
-        self.assertIn("1 HEIC/HEIF", err)
-        self.assertIn("1 text, not an image", err)
+        self.assertIn("text, not an image", err)
         self.assertIn("1 empty file", err)
+
+    def test_missing_decoder_is_reported_as_such(self):
+        self._save("a.jpg")
+        (self.d / "h.heic").write_bytes(HEIC_HEAD)
+        with patch.object(_image, "HEIF", False):
+            ok, _, err = self._load([self.d / "a.jpg", self.d / "h.heic"])
+        self.assertEqual([f.name for f in ok], ["a.jpg"])
+        self.assertIn("needs pillow-heif", err)
 
     def test_all_unreadable_exits_with_one_line(self):
         (self.d / "x.jpg").write_bytes(b"<html>blocked</html>")
+        (self.d / "y.CR2").write_bytes(b"II*\x00\x10\x00\x00\x00CR\x02\x00")
         with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
-            match._open_images([self.d / "x.jpg"])
+            match._open_images([self.d / "x.jpg", self.d / "y.CR2"])
         self.assertEqual(len(str(caught.exception.code).splitlines()), 1)
-        self.assertIn("none of the 1 candidate files", str(caught.exception.code))
+        self.assertIn("none of the 2 candidate files", str(caught.exception.code))
 
-    def test_rank_candidates_keep_ids_aligned_with_images(self):
-        self._jpeg("first.jpg", (255, 0, 0))
-        (self.d / "middle.jpg").write_bytes(b"\x00\x00\x00\x1cftypheic" + b"\x00" * 64)
-        self._jpeg("last.jpg", (0, 0, 255))
+    def _candidates(self):
         args = SimpleNamespace(images=str(self.d), items=None, panos=None, cache=str(self.d / ".cache"))
-        with contextlib.redirect_stderr(io.StringIO()):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
             items, ims = match._load_candidates(args)
-        self.assertEqual([it["id"] for it in items], ["first", "last"])
-        self.assertEqual([im.getpixel((0, 0))[2] > 128 for im in ims], [False, True])
+        return items, ims, err.getvalue()
 
-    @unittest.skipUnless(match.HEIF, "pillow-heif not installed")
-    def test_heic_saved_as_jpg_is_decoded(self):
-        self._jpeg("a.jpg")
-        Image.new("RGB", (40, 30), (0, 0, 255)).save(self.d / "phone.jpg", format="HEIF")
-        self.assertEqual((self.d / "phone.jpg").read_bytes()[4:12], b"ftypheic")
-        ok, ims, err = self._load(sorted(self.d.glob("*.jpg")))
-        self.assertEqual([f.name for f in ok], ["a.jpg", "phone.jpg"])
-        self.assertEqual(ims[1].size, (40, 30))
-        self.assertGreater(ims[1].getpixel((0, 0))[2], 200)
+    def test_mixed_folder_keeps_ids_aligned(self):
+        self._save("first.jpg", color=(255, 0, 0))
+        (self.d / "middle.jpg").write_bytes(HEIC_HEAD)
+        self._save("last.png", "PNG", color=(0, 0, 255))
+        self._save("UPPER.WEBP", "WEBP", color=(0, 255, 0))
+        self._save("renamed.bin", "PNG", color=(255, 255, 0))
+        items, ims, _ = self._candidates()
+        ids = [it["id"] for it in items]
+        self.assertEqual(ids[:2], ["first", "last"])
+        self.assertEqual(sorted(ids[2:]), ["UPPER", "renamed"])
+        colors = {it["id"]: im.convert("RGB").getpixel((0, 0)) for it, im in zip(items, ims)}
+        self.assertGreater(colors["first"][0], 240)
+        self.assertGreater(colors["last"][2], 240)
+        self.assertGreater(colors["UPPER"][1], 240)
+
+    @unittest.skipUnless(_image.HEIF, "pillow-heif not installed")
+    def test_heic_only_folder(self):
+        for i, c in enumerate(((255, 0, 0), (0, 0, 255))):
+            Image.new("RGB", (40, 30), c).save(self.d / f"p{i}.HEIC", format="HEIF")
+        Image.new("RGB", (40, 30), (0, 200, 0)).save(self.d / "phone.jpg", format="HEIF")
+        items, ims, err = self._candidates()
+        self.assertEqual([it["id"] for it in items], ["phone", "p0", "p1"])
+        self.assertEqual([im.size for im in ims], [(40, 30)] * 3)
         self.assertEqual(err, "")
-
-    def test_heic_reason_depends_on_pillow_heif(self):
-        (self.d / "x.jpg").write_bytes(b"\x00\x00\x00\x1cftypheic" + b"\x00" * 64)
-        for available, expected in ((True, "could not decode"), (False, "needs pillow-heif")):
-            with patch.object(match, "HEIF", available):
-                self.assertIn(expected, match._why_unreadable(self.d / "x.jpg", OSError()))
 
 
 if __name__ == "__main__":

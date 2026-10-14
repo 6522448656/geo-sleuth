@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["playwright", "pillow"]
+# dependencies = ["playwright", "pillow", "pillow-heif"]
 # ///
 """Reverse image search + Chinese keyword search: headless Chrome or Chromium opens the search engines, saves result screenshots, extracts guess text and links.
 
@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 from _browser import launch_browser
+from _image import ImageReadError, open_image
 from _net import fetch_bytes, PROXY_HELP
 import asyncio
 import io
@@ -109,8 +110,8 @@ def _similar_sheet(query: Path, items: list[dict], out: Path, cols: int = 5, til
     with ThreadPoolExecutor(8) as ex:
         ims = list(ex.map(fetch, [it["thumb"] for it in items]))
     try:
-        q = Image.open(query).convert("RGB")
-    except Exception:  # noqa: BLE001
+        q = open_image(query).convert("RGB")
+    except ImageReadError:
         q = None
     tiles = [(q, "query", "cyan")] + [
         (im, f"{i:02d} {it['site'] or '?'}", "yellow") for i, (it, im) in enumerate(zip(items, ims))]

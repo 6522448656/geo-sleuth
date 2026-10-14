@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["numpy", "pillow"]
+# dependencies = ["numpy", "pillow", "pillow-heif"]
 # ///
 """Image processing before looking at and searching with a photo.
 
@@ -33,6 +33,7 @@ piers output JSON:
 from __future__ import annotations
 
 import argparse
+from _image import open_or_exit
 import json
 import sys
 from pathlib import Path
@@ -221,7 +222,7 @@ drop non-pier peaks (bright foreground spots, railings, trees); structure segmen
     pr.add_argument("--sheet", type=Path, help="draw the row band and each column (numbered) on the original image, for a person to check")
 
     args = ap.parse_args()
-    im = ImageOps.exif_transpose(Image.open(args.image)).convert("RGB")
+    im = ImageOps.exif_transpose(open_or_exit(args.image, "image")).convert("RGB")
     W, H = im.size
 
     if args.cmd == "zoom":
