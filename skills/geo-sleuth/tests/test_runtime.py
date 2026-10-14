@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 import http.server
 import io
@@ -24,12 +25,15 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from PIL import Image
+
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import _net
 import _browser
 import _device
+import match
 import baidu_pano
 import doctor
 import evidence
@@ -596,6 +600,57 @@ class DeviceTests(unittest.TestCase):
             text = (scripts / name).read_text(encoding="utf-8")
             self.assertIn("self.dev = torch_device(torch)", text)
             self.assertNotIn("mps.is_available", text)
+
+
+class MatchImageLoadingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+
+    def _jpeg(self, name, color=(200, 30, 30)):
+        Image.new("RGB", (32, 24), color).save(self.d / name, quality=90)
+
+    def _load(self, files):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            ok, ims = match._open_images(files)
+        return ok, ims, err.getvalue()
+
+    def test_unreadable_files_are_skipped_with_reasons(self):
+        self._jpeg("a.jpg")
+        self._jpeg("b.jpg", (30, 200, 30))
+        (self.d / "heic.jpg").write_bytes(b"\x00\x00\x00\x1cftypheic" + b"\x00" * 64)
+        (self.d / "error.jpg").write_bytes('{"status":400,"msg":"bad"}'.encode())
+        (self.d / "empty.jpg").write_bytes(b"")
+        full = (self.d / "a.jpg").read_bytes()
+        (self.d / "cut.jpg").write_bytes(full[: len(full) // 2])
+        files = sorted(self.d.glob("*.jpg"))
+        ok, ims, err = self._load(files)
+        self.assertEqual([f.name for f in ok], ["a.jpg", "b.jpg"])
+        self.assertEqual([im.size for im in ims], [(32, 24), (32, 24)])
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertIn("skipped 4 of 6 files", err)
+        self.assertIn("1 HEIC/HEIF", err)
+        self.assertIn("1 text, not an image", err)
+        self.assertIn("1 empty file", err)
+
+    def test_all_unreadable_exits_with_one_line(self):
+        (self.d / "x.jpg").write_bytes(b"<html>blocked</html>")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            match._open_images([self.d / "x.jpg"])
+        self.assertEqual(len(str(caught.exception.code).splitlines()), 1)
+        self.assertIn("none of the 1 candidate files", str(caught.exception.code))
+
+    def test_rank_candidates_keep_ids_aligned_with_images(self):
+        self._jpeg("first.jpg", (255, 0, 0))
+        (self.d / "middle.jpg").write_bytes(b"\x00\x00\x00\x1cftypheic" + b"\x00" * 64)
+        self._jpeg("last.jpg", (0, 0, 255))
+        args = SimpleNamespace(images=str(self.d), items=None, panos=None, cache=str(self.d / ".cache"))
+        with contextlib.redirect_stderr(io.StringIO()):
+            items, ims = match._load_candidates(args)
+        self.assertEqual([it["id"] for it in items], ["first", "last"])
+        self.assertEqual([im.getpixel((0, 0))[2] > 128 for im in ims], [False, True])
 
 
 if __name__ == "__main__":
