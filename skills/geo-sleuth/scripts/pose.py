@@ -25,6 +25,8 @@ spec.json format:
   "fix": ["hfov"]
 }
 - px: pixel coordinates of the point in the photo as an image viewer shows it (EXIF orientation applied, top-left is 0,0); imgprep.py and ocr.py outputs use the same frame.
+  A spec measured on the stored, unrotated pixels of a photo with an EXIF orientation (older specs may be) adds "frame": "stored";
+  the solved pose.json keeps the frame in _frame, and `project` draws in it. A pose.json without one predates this and is read as "stored".
 - h: height of the point, **on the same datum as the camera height**. Using elevation above sea level throughout is the most reliable: ground points via `terrain.py elev`, rooftop = ground elevation + building height.
 - init: rough camera position and heading; if unknown, give the center of the candidate area, and --restarts will start from multiple points within --search-radius.
 - fix: parameters that can be fixed (hfov, roll, height); if you know the focal length, fix hfov; more stable with few points.
@@ -37,7 +39,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
-from _image import open_photo
+from _image import frame_of, open_photo
 import json
 import math
 import re
@@ -167,7 +169,7 @@ def solve(spec: dict, search_radius: float, restarts: int, seed: int = 7,
     else:
         out["sigma"] = "zero degrees of freedom, can't estimate the error; add more points"
     out["_params"] = [float(x) for x in p]
-    out["_frame"] = {"lat0": lat0, "lon0": lon0, "image_size": [W, H]}
+    out["_frame"] = {"lat0": lat0, "lon0": lon0, "image_size": [W, H], "frame": frame_of(spec, "upright")}
     mc = mc_radius(p, free, pts, obs, W, H, pt_sigma, rms)
     out["radius_m"] = mc["radius_m"]
     out["radius_note"] = (f"95% radius, Monte Carlo {mc['trials']} trials: control-point coordinates perturbed by ±{pt_sigma:g} m"
@@ -321,7 +323,7 @@ def sanity(pose: dict, pts: list[dict], horizon_row: float | None = None) -> lis
 
 def draw(photo: Path, pose: dict, pts: list[dict], out: Path, observed: bool) -> None:
     W, H = pose["_frame"]["image_size"]
-    im = open_photo(photo, "photo", recorded_size=[W, H]).convert("RGB")
+    im = open_photo(photo, "photo", frame=frame_of(pose["_frame"]), size=[W, H]).convert("RGB")
     sx, sy = im.width / W, im.height / H
     lat0, lon0 = pose["_frame"]["lat0"], pose["_frame"]["lon0"]
     kx, ky = _frame(lat0)
@@ -368,7 +370,7 @@ def main() -> None:
     pr.add_argument("--points", type=Path, required=True, help='[{"name":…,"ll":[lat,lon],"h":…}] or {name:[lat,lon,h]}')
     pr.add_argument("--photo", type=Path, required=True)
     pr.add_argument("--out", type=Path, required=True)
-    pr.add_argument("--horizon", type=float, help="row of the sea horizon / distant flat horizon in the photo (original image pixels): used to calibrate and validate pitch")
+    pr.add_argument("--horizon", type=float, help="row of the sea horizon / distant flat horizon in the photo, in the frame of the pose's points: used to calibrate and validate pitch")
     args = ap.parse_args(_neg_coords(sys.argv[1:]))
 
     if args.cmd == "solve":

@@ -39,7 +39,7 @@ For the fields of ridge.json and fit.json, see each subcommand's --help.
 from __future__ import annotations
 
 import argparse
-from _image import open_image, open_photo
+from _image import frame_of, open_image, open_photo
 from _net import curl_args, PROXY_HELP
 import json
 import math
@@ -702,7 +702,7 @@ def _fit_sheet(recs: list[dict], ridge: dict, photo: Path | None, out: Path, arg
     th = int(H * s)
     base = None
     if photo and photo.exists():
-        base = open_photo(photo, "photo", recorded_size=[W, H], recorded_frame=ridge.get("frame")).convert("RGB").resize((tw, th))
+        base = open_photo(photo, "photo", frame=frame_of(ridge), size=[W, H]).convert("RGB").resize((tw, th))
     cols = max(1, args.sheet_cols)
     rows = math.ceil(len(recs) / cols)
     sheet = Image.new("RGB", (tw * cols, th * rows), "white")
@@ -1210,6 +1210,8 @@ Two-layer photos (a lower near range in front of a higher far range, the near ra
 Output JSON (--out):
   {"photo": photo path (recorded exactly as given on the command line; if fit can't find it, it retries relative to the directory of ridge.json),
    "image_size": [width, height], "cx": center column,
+   "frame": "upright",               # pixel coordinates are in the photo as a viewer shows it (EXIF orientation applied);
+                                     # a ridge.json without this key predates that and is drawn on the stored pixels
    "ridge": [[x, y], ...],           # ridge pixel points, x column y row (y is the mountain's first row)
    "missing_cols": [x, ...],         # columns where no jump was found
    "ridge_source": "detected"|"points",

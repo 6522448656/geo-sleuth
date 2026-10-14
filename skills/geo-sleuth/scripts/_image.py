@@ -6,7 +6,10 @@ outputs (map tiles, panoramas) keep plain `Image.open`. Callers that import this
 PEP 723 header.
 
 Pixel coordinates (crop boxes, OCR boxes, ridge points, pose points) refer to the upright frame, the photo as an
-image viewer shows it: `open_photo` / `upright` apply the EXIF orientation exactly once.
+image viewer shows it: `open_photo` / `upright` apply the EXIF orientation exactly once. Records a script writes
+with pixel coordinates in them (ridge.json, a pose record's `_frame`) say so with "frame": "upright". A record
+without the key was written before orientation was applied, when those scripts drew on the stored pixels; it is
+read in that "stored" frame whatever the image size (`frame_of`), so old records give the overlays they gave then.
 """
 from __future__ import annotations
 
@@ -182,21 +185,37 @@ def upright(im: Image.Image) -> Image.Image:
     return im if orientation(im) == 1 else ImageOps.exif_transpose(im)
 
 
-def open_photo(path: Path | str, what: str = "photo", recorded_size=None, recorded_frame: str | None = None) -> Image.Image:
-    """open_or_exit, then upright. recorded_size / recorded_frame come from a record that holds pixel coordinates
-    (ridge.json, a pose spec). A record without "frame": "upright" whose size matches the stored, unrotated pixels
-    but not the upright ones was written before orientation was applied: keep it in that frame, and say so."""
+FRAMES = ("upright", "stored")
+
+
+def frame_of(record: dict, default: str = "stored") -> str:
+    """Frame of the pixel coordinates in a record: its "frame" value, else `default`. For records a script wrote
+    (ridge.json, a pose record's _frame) the default "stored" is the frame every record without the key was written in."""
+    frame = record.get("frame", default)
+    if frame not in FRAMES:
+        sys.exit(f'"frame" must be one of {", ".join(FRAMES)}, not {frame!r}')
+    return frame
+
+
+def open_photo(path: Path | str, what: str = "photo", frame: str = "upright", size=None) -> Image.Image:
+    """open_or_exit, in the frame of the coordinates that will be drawn on it: "upright" (EXIF orientation applied) or
+    "stored" (the decoded pixels as they are, the frame of records written before orientation was applied).
+    size: the image size a record gives, checked against the photo in that frame (records may be scaled, so the
+    aspect ratio is what must agree)."""
     im = open_or_exit(path, what)
     o = orientation(im)
-    if o == 1:
-        return im
-    stored = list(im.size)
-    up = stored if o <= 4 else stored[::-1]
-    if recorded_frame != "upright" and recorded_size is not None and list(recorded_size) == stored != up:
-        print(f"note: {path} has EXIF orientation {o}; this record's coordinates are in the stored {stored[0]}x{stored[1]} frame "
-              f"(written before orientation was applied), so it is drawn unrotated", file=sys.stderr)
-        return im
-    return upright(im)
+    if frame == "stored":
+        if o != 1:
+            print(f"note: {path} has EXIF orientation {o}; this record's coordinates are in the stored frame (a record without "
+                  f"\"frame\": \"upright\" was written before orientation was applied), so it is drawn on the stored "
+                  f"{im.width}x{im.height} pixels, unrotated", file=sys.stderr)
+    else:
+        im = upright(im)
+    if size is not None and size[0] > 0 and size[1] > 0 and abs(size[0] / size[1] - im.width / im.height) > 0.01 * im.width / im.height:
+        print(f"warning: the record's image size {size[0]}x{size[1]} doesn't match {path} in the {frame} frame "
+              f"({im.width}x{im.height}); its points won't line up with the photo. If they were measured in the other frame, "
+              f"set \"frame\": \"{'stored' if frame == 'upright' else 'upright'}\" in the record", file=sys.stderr)
+    return im
 
 
 # Formats every later step and the search engines take as they are; anything else gets a working copy

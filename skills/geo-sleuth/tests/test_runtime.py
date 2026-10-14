@@ -890,16 +890,34 @@ class OrientationTests(unittest.TestCase):
             self.assertEqual(im.size, decoded.size)
             self.assertEqual(im.tobytes(), decoded.tobytes(), f"orientation {o}")
 
-    def test_old_records_in_the_stored_frame_stay_readable(self):
-        save_oriented(self.control, 6, self.d / "o6.png")
-        stored = list(stored_as(self.control, 6).size)          # 40x60, what the scripts used to see
+    def test_frames_are_read_from_the_record_not_guessed_from_the_size(self):
+        self.assertEqual(_image.frame_of({}), "stored")                     # written before orientation was applied
+        self.assertEqual(_image.frame_of({"frame": "upright"}), "upright")
+        self.assertEqual(_image.frame_of({}, "upright"), "upright")         # an agent-written spec defaults to upright
+        with self.assertRaises(SystemExit):
+            _image.frame_of({"frame": "sideways"})
+        for control in (self.control, upright_control(40, 40)):              # square: no size tells the frames apart
+            for o in range(1, 9):
+                save_oriented(control, o, self.d / f"o{o}.png")
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    stored = _image.open_photo(self.d / f"o{o}.png", frame="stored", size=stored_as(control, o).size)
+                self.assertEqual(stored.convert("RGB").tobytes(), stored_as(control, o).tobytes(), f"orientation {o}")
+                self.assertEqual("stored frame" in err.getvalue(), o != 1, err.getvalue())
+                self.assertNotIn("warning", err.getvalue())
+                up = _image.open_photo(self.d / f"o{o}.png", size=control.size)
+                self.assertEqual(up.convert("RGB").tobytes(), control.tobytes(), f"orientation {o}")
+
+    def test_a_size_that_fits_neither_frame_is_flagged(self):
+        save_oriented(self.control, 6, self.d / "o6.png")                    # 40x60 stored, 60x40 upright
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            old = _image.open_photo(self.d / "o6.png", recorded_size=stored)
-        self.assertEqual(list(old.size), stored)
-        self.assertIn("stored 40x60 frame", err.getvalue())
-        self.assertEqual(_image.open_photo(self.d / "o6.png", recorded_size=[60, 40]).size, (60, 40))
-        self.assertEqual(_image.open_photo(self.d / "o6.png", recorded_size=stored, recorded_frame="upright").size, (60, 40))
+            _image.open_photo(self.d / "o6.png", size=[40, 60])               # a stored-frame size in an upright record
+        self.assertIn('set "frame": "stored"', err.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            _image.open_photo(self.d / "o6.png", size=[120, 80])              # same aspect, scaled: fine
+        self.assertEqual(err.getvalue(), "")
 
     def test_match_query_and_candidates_use_the_upright_frame(self):
         save_oriented(self.control, 6, self.d / "q.png")
@@ -925,24 +943,61 @@ class OrientationTests(unittest.TestCase):
             self._run("imgprep.py", "zoom", self.d / f"{name}.png", "--box", "0,0,30,20", "--scale", "2", "--out", self.d / f"z_{name}.png")
         self.assertEqual(Image.open(self.d / "z_o6.png").tobytes(), Image.open(self.d / "z_up.png").tobytes())
 
-    def test_pose_overlay_uses_the_upright_frame_and_reads_old_records(self):
-        w, h = 240, 160
-        scene = upright_control(w, h)
-        scene.save(self.d / "up.png")
-        save_oriented(scene, 6, self.d / "o6.png")
+    def _pose_case(self, w, h):
         lat0, lon0 = 30.0, 120.0
         rec = {"_frame": {"lat0": lat0, "lon0": lon0, "image_size": [w, h]},
                "_params": [0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 200.0]}         # east, north, height, heading, pitch, roll, focal_px
-        pts = [{"name": "A", "ll": [lat0 + 0.0009, lon0 + 0.0002], "h": 5.0, "px": [150, 90]},
-               {"name": "B", "ll": [lat0 + 0.0009, lon0 - 0.0003], "h": 0.0, "px": [60, 100]}]
-        for name in ("up", "o6"):
-            pose.draw(self.d / f"{name}.png", rec, pts, self.d / f"d_{name}.png", observed=True)
-        self.assertEqual(Image.open(self.d / "d_o6.png").tobytes(), Image.open(self.d / "d_up.png").tobytes())
-        old = {"_frame": dict(rec["_frame"], image_size=[h, w]), "_params": rec["_params"]}   # a record made on the stored pixels
+        pts = [{"name": "A", "ll": [lat0 + 0.0009, lon0 + 0.0002], "h": 5.0, "px": [w * 5 // 8, h * 9 // 16]},
+               {"name": "B", "ll": [lat0 + 0.0009, lon0 - 0.0003], "h": 0.0, "px": [w // 4, h * 5 // 8]}]
+        return rec, pts
+
+    def _draw(self, photo, rec, pts, out):
         with contextlib.redirect_stderr(io.StringIO()) as err:
-            pose.draw(self.d / "o6.png", old, pts, self.d / "d_old.png", observed=True)
-        self.assertEqual(Image.open(self.d / "d_old.png").size, (h, w))
-        self.assertIn("stored 160x240 frame", err.getvalue())
+            pose.draw(photo, rec, pts, out, observed=True)
+        with Image.open(out) as im:
+            return im.tobytes(), err.getvalue()
+
+    def test_pose_overlay_uses_the_upright_frame(self):
+        for w, h in ((240, 160), (160, 160)):
+            scene = upright_control(w, h)
+            scene.save(self.d / "up.png")
+            rec, pts = self._pose_case(w, h)
+            rec["_frame"]["frame"] = "upright"
+            control, _ = self._draw(self.d / "up.png", rec, pts, self.d / "d_up.png")
+            for o in range(2, 9):
+                save_oriented(scene, o, self.d / f"o{o}.png")
+                got, err = self._draw(self.d / f"o{o}.png", rec, pts, self.d / f"d_o{o}.png")
+                self.assertEqual(got, control, f"{w}x{h} orientation {o}")
+                self.assertEqual(err, "")
+
+    def test_old_pose_records_draw_as_they_did(self):
+        """A pose.json from before #29 has no frame: its points were drawn on the stored pixels, and still are. Covers the
+        cases a size check can't tell apart: mirror / 180° (2, 3, 4) keep the size, and a square photo keeps it under 6."""
+        for (w, h), orients in (((240, 160), (2, 3, 4, 6, 8)), ((160, 160), (6, 3))):
+            scene = upright_control(w, h)
+            for o in orients:
+                stored = stored_as(scene, o)
+                stored.save(self.d / "plain.png")                             # what the old pose.draw opened: no EXIF to apply
+                save_oriented(scene, o, self.d / f"o{o}.png")
+                rec, pts = self._pose_case(*stored.size)                      # recorded on the stored pixels
+                old, _ = self._draw(self.d / "plain.png", rec, pts, self.d / "d_plain.png")
+                got, err = self._draw(self.d / f"o{o}.png", rec, pts, self.d / f"d_o{o}.png")
+                self.assertEqual(got, old, f"{w}x{h} orientation {o}")
+                self.assertIn(f"EXIF orientation {o}", err)
+                self.assertNotIn("warning", err)
+
+    def test_pose_solve_records_the_frame_of_its_points(self):
+        lat0, lon0, W, H = 30.0, 120.0, 400, 300
+        kx, ky = pose._frame(lat0)
+        truth = np.array([3.0, -4.0, 12.0, 20.0, -2.0, 0.0, 350.0])
+        enu = np.array([[-60, 220, 0], [40, 260, 25], [90, 180, 5], [-20, 140, 15], [10, 320, 40], [-90, 300, 8]], float)
+        uv, _ = pose.project(truth, enu, W, H)
+        spec = {"image_size": [W, H], "init": {"at": [lat0, lon0], "height": 10, "heading": 15, "pitch": 0, "hfov": 60},
+                "points": [{"name": f"P{i}", "ll": [lat0 + n / ky, lon0 + e / kx], "h": u, "px": [float(x), float(y)]}
+                           for i, ((e, n, u), (x, y)) in enumerate(zip(enu, uv))]}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(pose.solve(spec, 50, 2)["_frame"]["frame"], "upright")
+            self.assertEqual(pose.solve(dict(spec, frame="stored"), 50, 2)["_frame"]["frame"], "stored")
 
     def test_terrain_ridge_points_and_overlay_use_the_upright_frame(self):
         w, h = 240, 160
@@ -961,6 +1016,67 @@ class OrientationTests(unittest.TestCase):
             self.assertEqual(out[name]["frame"], "upright")
             self.assertEqual(out[name]["ridge"], out["up"]["ridge"], name)
             self.assertEqual(Image.open(self.d / f"r_{name}.png").tobytes(), Image.open(self.d / "r_up.png").tobytes(), name)
+
+    def test_exif_gives_the_upright_size_only_when_it_differs_in_frame(self):
+        self.control.save(self.d / "o1.jpg", quality=95)
+        save_oriented(self.control, 6, self.d / "o6.jpg", fmt="JPEG", quality=95)
+        save_oriented(self.control, 3, self.d / "o3.jpg", fmt="JPEG", quality=95)
+        out = {}
+        for name in ("o1", "o6", "o3"):
+            out[name] = json.loads(self._run("exif.py", self.d / f"{name}.jpg").stdout.splitlines()[0])
+        self.assertEqual(sorted(out["o1"]), ["file", "size"])                 # ordinary photos: output as before
+        self.assertEqual((out["o6"]["size"], out["o6"]["orientation"], out["o6"]["upright_size"]), ([40, 60], 6, [60, 40]))
+        self.assertEqual((out["o3"]["size"], out["o3"]["orientation"], out["o3"]["upright_size"]), ([60, 40], 3, [60, 40]))
+        if _image.HEIF:
+            save_oriented(self.control, 6, self.d / "h6.heic", fmt="HEIF", quality=-1)
+            self.assertNotIn("orientation", json.loads(self._run("exif.py", self.d / "h6.heic").stdout.splitlines()[0]))
+
+    def _fit_sheet(self, photo, ridge, out):
+        import terrain
+        rec = {"f": 200.0, "cam": [30.0, 120.0], "g": 0.0, "H": 0.0, "cc": 0.0, "hit": 1, "name": "x",
+               "rms": 0.1, "flatpen": 0.0, "total": 0.1}
+        args = SimpleNamespace(sheet_width=120, sheet_cols=1, range=1000, zoom=12, cache=self.d, proxy=None,
+                               allow_missing=False, eye=1.6, near=40)
+        with patch.object(terrain, "DEM", side_effect=SystemExit("offline")), contextlib.redirect_stderr(io.StringIO()) as err:
+            terrain._fit_sheet([rec], ridge, photo, out, args, np.arange(0, 360, 1.0), 8)
+        with Image.open(out) as im:
+            return im.tobytes(), err.getvalue()
+
+    def test_fit_sheet_draws_old_ridge_records_on_the_stored_pixels(self):
+        for w, h in ((240, 160), (160, 160)):
+            scene = upright_control(w, h)
+            scene.save(self.d / "up.png")
+            for o in (3, 6):
+                save_oriented(scene, o, self.d / f"o{o}.png")
+                stored = stored_as(scene, o)
+                stored.save(self.d / "plain.png")
+                old = {"image_size": list(stored.size), "hrow": stored.height / 2, "cx": stored.width / 2, "flat": None,
+                       "ridge": [[10, 20], [stored.width - 30, 45]]}          # ridge.json from before #29: no frame
+                want, _ = self._fit_sheet(self.d / "plain.png", old, self.d / "s_plain.jpg")
+                got, err = self._fit_sheet(self.d / f"o{o}.png", old, self.d / f"s_o{o}.jpg")
+                self.assertEqual(got, want, f"{w}x{h} orientation {o}")
+                self.assertIn("stored frame", err)
+                new = dict(old, image_size=[w, h], hrow=h / 2, cx=w / 2, ridge=[[10, 20], [w - 30, 45]], frame="upright")
+                want, _ = self._fit_sheet(self.d / "up.png", new, self.d / "s_up.jpg")
+                got, err = self._fit_sheet(self.d / f"o{o}.png", new, self.d / f"s2_o{o}.jpg")
+                self.assertEqual(got, want, f"{w}x{h} orientation {o}, upright record")
+                self.assertNotIn("stored frame", err)
+
+    def test_spacing_warns_when_an_old_ridge_meets_upright_columns(self):
+        import geo
+        save_oriented(self.control, 6, self.d / "o6.png")
+        self.control.save(self.d / "up.png")
+        pts = [[5, 10], [20, 12], [35, 9], [50, 14]]
+        cases = {"old_o6": ({"photo": "o6.png", "ridge": pts}, True),       # photo path relative to the ridge file
+                 "new_o6": ({"photo": str(self.d / "o6.png"), "frame": "upright", "ridge": pts}, False),
+                 "old_up": ({"photo": str(self.d / "up.png"), "ridge": pts}, False),
+                 "handwritten": ({"5": 10, "20": 12, "35": 9, "50": 14}, False)}
+        for name, (rec, warn) in cases.items():
+            path = self.d / f"{name}.json"
+            path.write_text(json.dumps(rec), encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(geo._spacing_ridge(str(path))["pts"], [[float(x), float(y)] for x, y in pts])
+            self.assertEqual("stored frame" in err.getvalue(), warn, f"{name}: {err.getvalue()}")
 
 
 class WorkingCopyTests(unittest.TestCase):
