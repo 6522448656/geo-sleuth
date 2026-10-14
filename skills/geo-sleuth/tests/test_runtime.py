@@ -166,7 +166,8 @@ class BrowserTests(unittest.IsolatedAsyncioTestCase):
         # Avoid requiring Playwright in this offline test's environment.
         fake = SimpleNamespace(async_playwright=lambda: manager)
         with tempfile.TemporaryDirectory() as folder, patch.dict(sys.modules, {"playwright.async_api": fake}), patch.object(revimg, "launch_browser", AsyncMock(return_value=(browser, "test"))) as launch, patch.object(revimg, "_text", AsyncMock(return_value={"links": []})), patch.object(revimg, "_baidu", AsyncMock(return_value={"links": []})) as baidu, patch.object(revimg, "_yandex", AsyncMock(return_value={"links": []})):
-            await revimg.run([Path("photo.jpg")], ["baidu", "yandex"], Path(folder), "direct", ["school"], ["bing"])
+            Image.new("RGB", (8, 8)).save(Path(folder) / "photo.jpg")
+            await revimg.run([Path(folder) / "photo.jpg"], ["baidu", "yandex"], Path(folder), "direct", ["school"], ["bing"])
             self.assertEqual(launch.await_count, 3)
             self.assertTrue(all(call.args[1] == "direct" for call in launch.await_args_list))
             self.assertEqual(baidu.await_args.args[-1], "direct")
@@ -1022,6 +1023,126 @@ class WorkingCopyTests(unittest.TestCase):
         self.assertEqual(up, self.d / "rev" / "upload" / "side.png")
         with Image.open(up) as im:
             self.assertEqual(im.size, (60, 40))
+
+
+class RevimgInputTests(unittest.TestCase):
+    """revimg.py: every input gets its own upload copy, and an input the shared loader rejects is reported, never uploaded.
+    The engines are fakes that note which file they were handed and what it shows at the moment of the call."""
+
+    COLORS = {"red": (220, 30, 30), "green": (30, 160, 30), "blue": (30, 30, 220), "gray": (128, 128, 128)}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.out = self.d / "rev"
+
+    def _solid(self, color, path, **kw):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (48, 32), self.COLORS[color]).save(path, **kw)
+        return path
+
+    def _color_of(self, path):
+        with Image.open(path) as im:
+            px = im.convert("RGB").getpixel((24, 16))
+        return min(self.COLORS, key=lambda c: sum((a - b) ** 2 for a, b in zip(self.COLORS[c], px)))
+
+    def _unreadable(self):
+        raw = self.d / "IMG_1.CR2"
+        raw.write_bytes(b"II*\x00\x10\x00\x00\x00CR\x02\x00" + b"\x00" * 64)
+        page = self.d / "tile.jpg"                                   # an error reply saved under an image name
+        page.write_bytes(b'{"status":429,"msg":"rate limited"}')
+        return raw, page
+
+    def _search(self, call):
+        sent = {"baidu": [], "yandex": []}
+
+        async def baidu(ctx, up, shot, *rest):
+            sent["baidu"].append((Path(up), self._color_of(up)))
+            return {"guess": [], "links": []}
+
+        async def yandex(ctx, up, shot):
+            sent["yandex"].append((Path(up), self._color_of(up)))
+            return {"guess": [], "links": []}
+
+        browser = SimpleNamespace(new_context=AsyncMock(), close=AsyncMock())
+        manager = AsyncMock()
+        manager.__aenter__.return_value = object()
+        fake = SimpleNamespace(async_playwright=lambda: manager)
+        with patch.dict(sys.modules, {"playwright.async_api": fake}), \
+                patch.object(revimg, "launch_browser", AsyncMock(return_value=(browser, "test"))) as launch, \
+                patch.object(revimg, "_baidu", new=baidu), patch.object(revimg, "_yandex", new=yandex):
+            got = call()
+        return got, sent, launch
+
+    def _main(self, *argv):
+        err, code = io.StringIO(), 0
+        with patch.object(sys, "argv", ["revimg.py", *map(str, argv)]), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            try:
+                revimg.main()
+            except SystemExit as e:
+                code = e.code
+        return code, err.getvalue()
+
+    def test_names_are_unique_without_regard_to_case(self):
+        self.assertEqual(revimg._names([Path("photo.jpg"), Path("v/left_crop.jpg")]), ["photo", "left_crop"])
+        self.assertEqual(revimg._names([Path("a/photo.jpg"), Path("b/PHOTO.png"), Path("c/02_photo.jpg"), Path("x.jpg")]),
+                         ["01_photo", "02_PHOTO", "03_02_photo", "x"])
+
+    def test_same_stems_upload_their_own_pixels(self):
+        images = {self._solid("red", self.d / "a" / "photo.webp", lossless=True): "red",
+                  self._solid("green", self.d / "b" / "Photo.webp", lossless=True): "green",   # same stem but for case
+                  self._solid("gray", self.d / "c" / "photo.jpg", quality=95): "gray"}         # needs no copy
+        if _image.HEIF:
+            images[self._solid("blue", self.d / "d" / "photo.heic", format="HEIF", quality=-1)] = "blue"
+        results, sent, _ = self._search(lambda: asyncio.run(revimg.run(list(images), ["baidu", "yandex"], self.out, "direct")))
+        for eng, calls in sent.items():
+            self.assertEqual([c for _, c in calls], list(images.values()), eng)
+            self.assertEqual(len({p for p, _ in calls}), len(images), f"{eng}: two inputs shared one upload file")
+        self.assertEqual(sent["baidu"][2][0], self.d / "c" / "photo.jpg")
+        records = [json.loads(f.read_text(encoding="utf-8")) for f in sorted(self.out.glob("*.json"))]
+        self.assertEqual(len(records), 2 * len(images))
+        for r in results + records:                                 # each record names the original whose pixels went out
+            self.assertEqual(self._color_of(r.get("uploaded", r["image"])), images[Path(r["image"])], r)
+
+    def test_unreadable_inputs_are_reported_and_not_uploaded(self):
+        raw, page = self._unreadable()
+        good = self._solid("red", self.d / "good.webp", lossless=True)
+        results, sent, _ = self._search(lambda: asyncio.run(revimg.run([raw, page, good], ["baidu", "yandex"], self.out, "direct")))
+        for eng, calls in sent.items():
+            self.assertEqual([c for _, c in calls], ["red"], eng)
+        bad = {(Path(r["image"]).name, r["engine"]): r["unreadable"] for r in results if r.get("unreadable")}
+        self.assertEqual(bad, {("IMG_1.CR2", "baidu"): "raw", ("IMG_1.CR2", "yandex"): "raw",
+                               ("tile.jpg", "baidu"): "not-image", ("tile.jpg", "yandex"): "not-image"})
+        rec = json.loads((self.out / "IMG_1_baidu.json").read_text(encoding="utf-8"))
+        self.assertIn("export it as JPEG or PNG", rec["error"])
+        self.assertNotIn("screenshot", rec)
+        self.assertEqual([f.name for f in (self.out / "upload").iterdir()], ["good.png"])
+
+    def test_cli_exits_2_naming_each_unreadable_input(self):
+        raw, page = self._unreadable()
+        good = self._solid("red", self.d / "good.jpg")
+        (code, err), sent, _ = self._search(lambda: self._main(raw, page, good, "--out-dir", self.out))
+        self.assertEqual(code, 2)
+        self.assertIn("2 of 3 images could not be read and were not uploaded", err)
+        self.assertIn(f"{raw} (camera RAW", err)
+        self.assertIn(f"{page} (text, not an image", err)
+        self.assertEqual([p for p, _ in sent["baidu"]], [good])
+
+    def test_cli_with_only_unreadable_inputs_starts_no_browser(self):
+        raw, page = self._unreadable()
+        (code, err), sent, launch = self._search(lambda: self._main(raw, page, "--out-dir", self.out))
+        self.assertEqual(code, 2)
+        self.assertEqual(launch.await_count, 0)
+        self.assertEqual(sent, {"baidu": [], "yandex": []})
+        self.assertEqual(sorted(f.name for f in self.out.iterdir()),
+                         ["IMG_1_baidu.json", "IMG_1_yandex.json", "tile_baidu.json", "tile_yandex.json"])
+        r = subprocess.run([sys.executable, revimg.__file__, str(raw), "--out-dir", str(self.d / "rev2")],
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("1 of 1 images could not be read", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
 
 
 class IntakeStatusTests(unittest.TestCase):
