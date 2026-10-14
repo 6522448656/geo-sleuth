@@ -46,7 +46,7 @@ Entries use the shared format (`references/clues/README.md`). Clues that tell Tu
 ### Tea gardens on steep slopes
 - Look for: low, clipped, dark-green bushes in tight rows covering steep hillsides, often with small houses scattered between them
 - Points to: the eastern Black Sea coast, Rize above all, with Artvin, Trabzon and Giresun
-- Strength: medium (Turkey's tea is grown almost only here)
+- Strength: weak by default, as for any vegetation without a month; medium when the month is known and the bushes show the clipped, flat-topped rows of a harvested plantation (Turkey's tea is grown almost only here)
 - Counterexamples: clipped hedges and boxwood plantings in gardens and parks; Georgia's Adjara coast across the border has the same landscape
 - Sources: en.wikipedia "Tea in Turkey" (Rize as the main region since the mid-20th century), https://en.wikipedia.org/wiki/Tea_in_Turkey; en.wikipedia "Rize Province", https://en.wikipedia.org/wiki/Rize_Province
 
