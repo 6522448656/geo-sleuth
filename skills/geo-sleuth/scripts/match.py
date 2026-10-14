@@ -201,6 +201,47 @@ def _render_items(items: list[dict], engine: str, proxy: str | None, cache: Path
         return list(ex.map(one, items))
 
 
+def _why_unreadable(f: Path, err: Exception) -> str:
+    """Short reason a candidate file could not be decoded, for the skip summary."""
+    try:
+        with open(f, "rb") as fh:
+            head = fh.read(16)
+    except OSError:
+        return "unreadable file"
+    if not head:
+        return "empty file"
+    if head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"heif", b"mif1", b"msf1"):
+        return "HEIC/HEIF, which Pillow cannot decode (convert to JPEG first)"
+    if head[4:8] == b"ftyp" and head[8:12] in (b"avif", b"avis"):
+        return "AVIF, which this Pillow build cannot decode (convert to JPEG first)"
+    if head.lstrip()[:1] in (b"<", b"{"):
+        return "text, not an image (probably an error page saved by a download)"
+    return type(err).__name__
+
+
+def _open_images(files: list[Path]) -> tuple[list[Path], list[Image.Image]]:
+    """Decode every candidate up front; skip the files Pillow cannot read and say why, instead of failing mid-run."""
+    ok, ims, bad = [], [], []
+    for f in files:
+        try:
+            im = Image.open(f)
+            im.load()
+        except Exception as e:  # noqa: BLE001
+            bad.append((f, _why_unreadable(f, e)))
+            continue
+        ok.append(f)
+        ims.append(im)
+    if bad:
+        kinds: dict[str, int] = {}
+        for _, why in bad:
+            kinds[why] = kinds.get(why, 0) + 1
+        detail = "; ".join(f"{n} {why}" for why, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
+        print(f"skipped {len(bad)} of {len(files)} files that are not readable images: {detail}; e.g. {bad[0][0].name}", file=sys.stderr)
+    if not ims:
+        sys.exit(f"none of the {len(files)} candidate files could be read as an image; see the reasons above")
+    return ok, ims
+
+
 def _load_candidates(args) -> tuple[list[dict], list[Image.Image]]:
     cache = Path(args.cache)
     if args.images:
@@ -208,8 +249,8 @@ def _load_candidates(args) -> tuple[list[dict], list[Image.Image]]:
         files = sorted(p.glob("*.jp*g")) + sorted(p.glob("*.png")) if p.is_dir() else [Path(x) for x in sorted(glob.glob(args.images))]
         if not files:
             sys.exit(f"--images has no images: {args.images}")
-        items = [{"id": f.stem, "file": str(f)} for f in files]
-        return items, [Image.open(f) for f in files]
+        files, ims = _open_images(files)
+        return [{"id": f.stem, "file": str(f)} for f in files], ims
     if args.items:
         items = json.loads(Path(args.items).read_text(encoding="utf-8"))
         if args.spread_headings:
@@ -317,8 +358,11 @@ def cmd_index(args) -> None:
     _proxy_env(args.proxy)
     p = Path(args.images)
     files = sorted(p.glob("*.jp*g")) + sorted(p.glob("*.png")) if p.is_dir() else [Path(x) for x in sorted(glob.glob(args.images))]
+    if not files:
+        sys.exit(f"--images has no images: {args.images}")
+    files, ims = _open_images(files)
     emb = Embedder(args.method)
-    feats = emb.embed([Image.open(f) for f in files], multi=False)[:, 0]
+    feats = emb.embed(ims, multi=False)[:, 0]
     np.savez(args.out, ids=np.array([f.stem for f in files]), files=np.array([str(f) for f in files]), feats=feats, method=args.method)
     print(f"{len(files)} images -> {args.out}")
 
