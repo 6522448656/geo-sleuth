@@ -24,7 +24,7 @@ spec.json format:
   "init": {"at": [lat, lon], "height": 560, "heading": 190, "pitch": -8, "hfov": 65},
   "fix": ["hfov"]
 }
-- px: pixel coordinates of the point in the photo (original image, top-left is 0,0).
+- px: pixel coordinates of the point in the photo as an image viewer shows it (EXIF orientation applied, top-left is 0,0); imgprep.py and ocr.py outputs use the same frame.
 - h: height of the point, **on the same datum as the camera height**. Using elevation above sea level throughout is the most reliable: ground points via `terrain.py elev`, rooftop = ground elevation + building height.
 - init: rough camera position and heading; if unknown, give the center of the candidate area, and --restarts will start from multiple points within --search-radius.
 - fix: parameters that can be fixed (hfov, roll, height); if you know the focal length, fix hfov; more stable with few points.
@@ -37,7 +37,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
-from _image import open_or_exit
+from _image import open_photo
 import json
 import math
 import re
@@ -320,8 +320,8 @@ def sanity(pose: dict, pts: list[dict], horizon_row: float | None = None) -> lis
 
 
 def draw(photo: Path, pose: dict, pts: list[dict], out: Path, observed: bool) -> None:
-    im = open_or_exit(photo, "photo").convert("RGB")
     W, H = pose["_frame"]["image_size"]
+    im = open_photo(photo, "photo", recorded_size=[W, H]).convert("RGB")
     sx, sy = im.width / W, im.height / H
     lat0, lon0 = pose["_frame"]["lat0"], pose["_frame"]["lon0"]
     kx, ky = _frame(lat0)

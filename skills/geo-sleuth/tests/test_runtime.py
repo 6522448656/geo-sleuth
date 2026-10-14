@@ -25,7 +25,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from PIL import Image
+import numpy as np
+from PIL import Image, ImageDraw
 
 import yaml
 
@@ -35,6 +36,7 @@ import _browser
 import _device
 import _image
 import match
+import pose
 import baidu_pano
 import doctor
 import evidence
@@ -814,6 +816,150 @@ class MatchImageLoadingTests(unittest.TestCase):
         self.assertEqual([it["id"] for it in items], ["phone", "p0", "p1"])
         self.assertEqual([im.size for im in ims], [(40, 30)] * 3)
         self.assertEqual(err, "")
+
+
+# EXIF orientation -> the transpose a viewer applies to the stored pixels; storing = applying the inverse
+VIEW = {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180, 4: Image.Transpose.FLIP_TOP_BOTTOM,
+        5: Image.Transpose.TRANSPOSE, 6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE, 8: Image.Transpose.ROTATE_90}
+INVERSE = {Image.Transpose.ROTATE_270: Image.Transpose.ROTATE_90, Image.Transpose.ROTATE_90: Image.Transpose.ROTATE_270}
+
+
+def upright_control(w=60, h=40):
+    """Asymmetric: every flip or rotation of it is a different image."""
+    im = Image.new("RGB", (w, h), (230, 230, 230))
+    im.paste((220, 30, 30), (0, 0, w // 3, h // 2))           # red, top-left
+    im.paste((30, 30, 220), (w - w // 4, h // 2, w, h))       # blue, bottom-right
+    im.paste((30, 160, 30), (w // 2, 0, w // 2 + 4, h // 4))  # green tick near the top
+    return im
+
+
+def stored_as(control, o):
+    if o == 1:
+        return control.copy()
+    t = VIEW[o]
+    return control.transpose(INVERSE.get(t, t))
+
+
+def save_oriented(control, o, path, fmt="PNG", **kw):
+    ex = Image.Exif()
+    ex[0x0112] = o
+    stored_as(control, o).save(path, format=fmt, exif=ex, **kw)
+
+
+class OrientationTests(unittest.TestCase):
+    """Stage 2 of #29: pixel coordinates refer to the upright frame; EXIF orientation is applied exactly once."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.control = upright_control()
+
+    def test_all_eight_orientations_match_the_upright_control(self):
+        for o in range(1, 9):
+            save_oriented(self.control, o, self.d / f"o{o}.png")
+            im = _image.open_photo(self.d / f"o{o}.png")
+            self.assertEqual(im.size, self.control.size, f"orientation {o}")
+            self.assertEqual(im.convert("RGB").tobytes(), self.control.tobytes(), f"orientation {o}")
+            self.assertEqual(_image.upright(im).tobytes(), im.tobytes(), f"orientation {o} applied twice")
+
+    def test_jpeg_orientations_match_within_compression_noise(self):
+        ref = np.asarray(self.control, dtype=np.int16)
+        for o in (3, 6, 8):
+            save_oriented(self.control, o, self.d / f"o{o}.jpg", fmt="JPEG", quality=95)
+            got = np.asarray(_image.open_photo(self.d / f"o{o}.jpg").convert("RGB"), dtype=np.int16)
+            self.assertEqual(got.shape, ref.shape)
+            self.assertLess(np.abs(got - ref).mean(), 3, f"orientation {o}")
+
+    def test_normal_photo_is_returned_untouched(self):
+        save_oriented(self.control, 1, self.d / "o1.png")
+        im = _image.open_image(self.d / "o1.png")
+        self.assertIs(_image.upright(im), im)
+
+    @unittest.skipUnless(_image.HEIF, "pillow-heif not installed")
+    def test_heif_is_not_rotated_again(self):
+        """libheif applies irot/imir itself and pillow-heif resets the EXIF tag; the HEIF spec says EXIF orientation is
+        ignored. Whatever the EXIF says, the result must be exactly what the HEIF decoder produced."""
+        for o in (1, 3, 6, 8):
+            save_oriented(self.control, o, self.d / f"h{o}.heic", fmt="HEIF", quality=-1)
+            decoded = Image.open(self.d / f"h{o}.heic")
+            decoded.load()
+            im = _image.open_photo(self.d / f"h{o}.heic")
+            self.assertEqual(_image.orientation(im), 1)
+            self.assertEqual(im.size, decoded.size)
+            self.assertEqual(im.tobytes(), decoded.tobytes(), f"orientation {o}")
+
+    def test_old_records_in_the_stored_frame_stay_readable(self):
+        save_oriented(self.control, 6, self.d / "o6.png")
+        stored = list(stored_as(self.control, 6).size)          # 40x60, what the scripts used to see
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            old = _image.open_photo(self.d / "o6.png", recorded_size=stored)
+        self.assertEqual(list(old.size), stored)
+        self.assertIn("stored 40x60 frame", err.getvalue())
+        self.assertEqual(_image.open_photo(self.d / "o6.png", recorded_size=[60, 40]).size, (60, 40))
+        self.assertEqual(_image.open_photo(self.d / "o6.png", recorded_size=stored, recorded_frame="upright").size, (60, 40))
+
+    def test_match_query_and_candidates_use_the_upright_frame(self):
+        save_oriented(self.control, 6, self.d / "q.png")
+        save_oriented(self.control, 8, self.d / "c8.png")
+        self.control.save(self.d / "c1.png")
+        self.assertEqual(match.open_photo(self.d / "q.png", "query").convert("RGB").tobytes(), self.control.tobytes())
+        args = SimpleNamespace(images=str(self.d), items=None, panos=None, cache=str(self.d / ".cache"))
+        with contextlib.redirect_stderr(io.StringIO()):
+            items, ims = match._load_candidates(args)
+        for it, im in zip(items, ims):
+            self.assertEqual(im.convert("RGB").tobytes(), self.control.tobytes(), it["id"])
+
+    def _run(self, script, *args):
+        r = subprocess.run([sys.executable, str(Path(_image.__file__).with_name(script)), *map(str, args)],
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r
+
+    def test_imgprep_crops_use_the_upright_frame(self):
+        save_oriented(self.control, 6, self.d / "o6.png")
+        self.control.save(self.d / "up.png")
+        for name in ("o6", "up"):
+            self._run("imgprep.py", "zoom", self.d / f"{name}.png", "--box", "0,0,30,20", "--scale", "2", "--out", self.d / f"z_{name}.png")
+        self.assertEqual(Image.open(self.d / "z_o6.png").tobytes(), Image.open(self.d / "z_up.png").tobytes())
+
+    def test_pose_overlay_uses_the_upright_frame_and_reads_old_records(self):
+        w, h = 240, 160
+        scene = upright_control(w, h)
+        scene.save(self.d / "up.png")
+        save_oriented(scene, 6, self.d / "o6.png")
+        lat0, lon0 = 30.0, 120.0
+        rec = {"_frame": {"lat0": lat0, "lon0": lon0, "image_size": [w, h]},
+               "_params": [0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 200.0]}         # east, north, height, heading, pitch, roll, focal_px
+        pts = [{"name": "A", "ll": [lat0 + 0.0009, lon0 + 0.0002], "h": 5.0, "px": [150, 90]},
+               {"name": "B", "ll": [lat0 + 0.0009, lon0 - 0.0003], "h": 0.0, "px": [60, 100]}]
+        for name in ("up", "o6"):
+            pose.draw(self.d / f"{name}.png", rec, pts, self.d / f"d_{name}.png", observed=True)
+        self.assertEqual(Image.open(self.d / "d_o6.png").tobytes(), Image.open(self.d / "d_up.png").tobytes())
+        old = {"_frame": dict(rec["_frame"], image_size=[h, w]), "_params": rec["_params"]}   # a record made on the stored pixels
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            pose.draw(self.d / "o6.png", old, pts, self.d / "d_old.png", observed=True)
+        self.assertEqual(Image.open(self.d / "d_old.png").size, (h, w))
+        self.assertIn("stored 160x240 frame", err.getvalue())
+
+    def test_terrain_ridge_points_and_overlay_use_the_upright_frame(self):
+        w, h = 240, 160
+        scene = Image.new("RGB", (w, h), (210, 220, 235))         # sky
+        ImageDraw.Draw(scene).polygon([(0, 70), (120, 40), (240, 90), (240, 160), (0, 160)], fill=(60, 70, 60))
+        scene.save(self.d / "up.png")
+        save_oriented(scene, 6, self.d / "o6.png")
+        save_oriented(scene, 3, self.d / "o3.png")
+        out = {}
+        for name in ("up", "o6", "o3"):
+            self._run("terrain.py", "ridge", self.d / f"{name}.png", "--x0", 10, "--x1", 230, "--step", 20,
+                      "--out", self.d / f"r_{name}.json", "--png", self.d / f"r_{name}.png")
+            out[name] = json.loads((self.d / f"r_{name}.json").read_text(encoding="utf-8"))
+        for name in ("o6", "o3"):
+            self.assertEqual(out[name]["image_size"], [w, h])
+            self.assertEqual(out[name]["frame"], "upright")
+            self.assertEqual(out[name]["ridge"], out["up"]["ridge"], name)
+            self.assertEqual(Image.open(self.d / f"r_{name}.png").tobytes(), Image.open(self.d / "r_up.png").tobytes(), name)
 
 
 if __name__ == "__main__":

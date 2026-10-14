@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import argparse
 from _browser import launch_browser
-from _image import ImageReadError, open_image
+from _image import ImageReadError, open_image, upright
 from _net import fetch_bytes, PROXY_HELP
 import asyncio
 import io
@@ -110,7 +110,7 @@ def _similar_sheet(query: Path, items: list[dict], out: Path, cols: int = 5, til
     with ThreadPoolExecutor(8) as ex:
         ims = list(ex.map(fetch, [it["thumb"] for it in items]))
     try:
-        q = open_image(query).convert("RGB")
+        q = upright(open_image(query)).convert("RGB")
     except ImageReadError:
         q = None
     tiles = [(q, "query", "cyan")] + [

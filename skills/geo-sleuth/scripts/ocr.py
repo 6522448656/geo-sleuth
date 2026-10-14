@@ -17,13 +17,13 @@ Examples:
 from __future__ import annotations
 
 import argparse
-from _image import open_or_exit
+from _image import open_photo
 import json
 import sys
 import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw
 
 
 def _iou(a, b) -> float:
@@ -159,7 +159,7 @@ def main() -> None:
     ap.add_argument("--out")
     ap.add_argument("--draw")
     args = ap.parse_args()
-    im = ImageOps.exif_transpose(open_or_exit(args.image, "image"))
+    im = open_photo(args.image, "image")
     t0 = time.time()
     be = backend([x.strip() for x in args.langs.split(",") if x.strip()])
     r, c = (int(v) for v in args.tiles.lower().split("x"))

@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import argparse
 from _device import torch_device
-from _image import ImageReadError, find_images, open_image, open_or_exit
+from _image import ImageReadError, find_images, open_image, open_photo, upright
 from _net import PROXY_HELP
 from _net import model_proxy_env
 import glob
@@ -207,7 +207,7 @@ def _open_images(files: list[Path]) -> tuple[list[Path], list[Image.Image]]:
     ok, ims, bad = [], [], []
     for f in files:
         try:
-            im = open_image(f)
+            im = upright(open_image(f))
         except ImageReadError as e:
             # group by reason; for decode errors drop the exception detail so one cause stays one line
             bad.append((f, e.reason.split(" (")[0] if e.category in ("decode-error", "not-image") else e.reason))
@@ -285,7 +285,7 @@ def _sheet(rows: list[dict], ims: dict, out: Path, cols: int = 3, tw: int = 480,
 
 def cmd_rank(args) -> None:
     _proxy_env(args.proxy)
-    q = open_or_exit(args.query, "query")
+    q = open_photo(args.query, "query")
     if args.query_box:
         x0, y0, x1, y1 = (int(float(v)) for v in args.query_box.split(","))
         q = q.crop((x0, y0, x1, y1))

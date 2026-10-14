@@ -39,7 +39,7 @@ For the fields of ridge.json and fit.json, see each subcommand's --help.
 from __future__ import annotations
 
 import argparse
-from _image import open_image, open_or_exit
+from _image import open_image, open_photo
 from _net import curl_args, PROXY_HELP
 import json
 import math
@@ -541,7 +541,7 @@ def _sky_edge(prof: np.ndarray, ymin: int, ymax: int, k: int, drop: float, hold:
 
 
 def _cmd_ridge(args) -> None:
-    im = open_or_exit(args.photo, "photo").convert("RGB")
+    im = open_photo(args.photo, "photo").convert("RGB")
     W, H = im.size
     a = np.asarray(im, dtype=np.float32)
     L = a[..., 0] * 0.299 + a[..., 1] * 0.587 + a[..., 2] * 0.114
@@ -597,7 +597,7 @@ def _cmd_ridge(args) -> None:
     if len(ridge) < 3:
         print(f"warning: only {len(ridge)} ridge points found ({len(missing)} columns missing), fit needs at least 3; adjust --drop/--ymin/--ymax or check --png", file=sys.stderr)
     out = {
-        "photo": str(args.photo), "image_size": [W, H], "cx": W / 2,
+        "photo": str(args.photo), "image_size": [W, H], "frame": "upright", "cx": W / 2,
         "ridge": ridge, "missing_cols": missing, "ridge_source": "points" if args.points else "detected",
         "near": near, "near_clear": near_clear,
         "flat": flat, "flat_rows": flat_rows,
@@ -702,7 +702,7 @@ def _fit_sheet(recs: list[dict], ridge: dict, photo: Path | None, out: Path, arg
     th = int(H * s)
     base = None
     if photo and photo.exists():
-        base = open_or_exit(photo, "photo").convert("RGB").resize((tw, th))
+        base = open_photo(photo, "photo", recorded_size=[W, H], recorded_frame=ridge.get("frame")).convert("RGB").resize((tw, th))
     cols = max(1, args.sheet_cols)
     rows = math.ceil(len(recs) / cols)
     sheet = Image.new("RGB", (tw * cols, th * rows), "white")
@@ -1400,7 +1400,7 @@ cyan dots = photo near points.""")
     if args.roll:
         im = im.rotate(-args.roll, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
     if args.photo and args.overlay:
-        ph = open_or_exit(args.photo, "photo").convert("RGB")
+        ph = open_photo(args.photo, "photo").convert("RGB")
         fpx = (ph.width / 2) / math.tan(math.radians(args.hfov / 2))
         cr, sr = math.cos(math.radians(args.roll)), math.sin(math.radians(args.roll))
         pts = []
@@ -1415,7 +1415,7 @@ cyan dots = photo near points.""")
         ph.save(ov, quality=90)
         print(f"skyline overlaid on photo -> {ov} (if the red line doesn't match the photo's ridgeline, first adjust --heading/--pitch/--hfov/--roll, then suspect the camera position)")
     if args.photo:
-        ph = open_or_exit(args.photo, "photo").convert("RGB")
+        ph = open_photo(args.photo, "photo").convert("RGB")
         ph = ph.resize((args.width, int(ph.height * args.width / ph.width)))
         S = Image.new("RGB", (args.width, ph.height + im.height), "white")
         S.paste(ph, (0, 0))

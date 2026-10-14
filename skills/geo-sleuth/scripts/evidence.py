@@ -27,7 +27,7 @@ Example: evidence.py spec.json --out evidence.jpg
 from __future__ import annotations
 
 import argparse
-from _image import open_or_exit
+from _image import open_photo
 import json
 import re
 import sys
@@ -147,7 +147,7 @@ def build(spec: dict, base: Path, out: Path) -> None:
         S.paste(im, (0, 0))
         d = ImageDraw.Draw(S)
         for k, (p, lines) in enumerate(zip(panels, lines_per)):
-            pim = open_or_exit(base / p["image"], "panel image").convert("RGB")
+            pim = open_photo(base / p["image"], "panel image").convert("RGB")
             pim.thumbnail((pw, ph))                        # keep aspect ratio, centered with black borders
             S.paste(pim, (k * pw + (pw - pim.width) // 2, im.size[1] + cap_h + (ph - pim.height) // 2))
             for li, text in enumerate(lines):

@@ -3,14 +3,17 @@ instead of trusting the suffix, RAW rejected with a request to export, and one f
 
 Scripts that read a photo or candidate images go through `open_image`; scripts that only read their own
 outputs (map tiles, panoramas) keep plain `Image.open`. Callers that import this declare `pillow-heif` in their
-PEP 723 header. Orientation is left to the caller.
+PEP 723 header.
+
+Pixel coordinates (crop boxes, OCR boxes, ridge points, pose points) refer to the upright frame, the photo as an
+image viewer shows it: `open_photo` / `upright` apply the EXIF orientation exactly once.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-from PIL import Image, features
+from PIL import Image, ImageOps, features
 
 try:
     import pillow_heif
@@ -29,6 +32,7 @@ RAW_SUFFIXES = {".3fr", ".arw", ".cr2", ".cr3", ".crw", ".dcr", ".dng", ".erf", 
 HEIF_BRANDS = {b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"heif", b"mif1", b"msf1"}
 AVIF_BRANDS = {b"avif", b"avis"}
 HEAD = 32   # bytes read to sniff a file
+ORIENTATION = 0x0112
 
 
 class ImageReadError(Exception):
@@ -158,3 +162,38 @@ def find_images(directory: Path | str) -> list[Path]:
         if kind not in (None, "TEXT"):
             sniffed.append(f)
     return files + by_suffix + sniffed
+
+
+def orientation(im: Image.Image) -> int:
+    """EXIF orientation (1–8) still to apply to the decoded pixels. HEIF is always 1: libheif applies the file's
+    irot/imir transforms and pillow-heif resets the EXIF tag, which the HEIF spec says to ignore."""
+    if im.format == "HEIF":
+        return 1
+    try:
+        o = int(im.getexif().get(ORIENTATION, 1) or 1)
+    except Exception:  # noqa: BLE001
+        return 1
+    return o if 1 <= o <= 8 else 1
+
+
+def upright(im: Image.Image) -> Image.Image:
+    """The image as a viewer shows it. Returns the same object when there is nothing to apply; otherwise
+    exif_transpose, whose result carries no orientation tag, so a second call changes nothing."""
+    return im if orientation(im) == 1 else ImageOps.exif_transpose(im)
+
+
+def open_photo(path: Path | str, what: str = "photo", recorded_size=None, recorded_frame: str | None = None) -> Image.Image:
+    """open_or_exit, then upright. recorded_size / recorded_frame come from a record that holds pixel coordinates
+    (ridge.json, a pose spec). A record without "frame": "upright" whose size matches the stored, unrotated pixels
+    but not the upright ones was written before orientation was applied: keep it in that frame, and say so."""
+    im = open_or_exit(path, what)
+    o = orientation(im)
+    if o == 1:
+        return im
+    stored = list(im.size)
+    up = stored if o <= 4 else stored[::-1]
+    if recorded_frame != "upright" and recorded_size is not None and list(recorded_size) == stored != up:
+        print(f"note: {path} has EXIF orientation {o}; this record's coordinates are in the stored {stored[0]}x{stored[1]} frame "
+              f"(written before orientation was applied), so it is drawn unrotated", file=sys.stderr)
+        return im
+    return upright(im)

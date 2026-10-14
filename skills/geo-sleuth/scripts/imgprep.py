@@ -33,7 +33,7 @@ piers output JSON:
 from __future__ import annotations
 
 import argparse
-from _image import open_or_exit
+from _image import open_photo
 import json
 import sys
 from pathlib import Path
@@ -222,7 +222,7 @@ drop non-pier peaks (bright foreground spots, railings, trees); structure segmen
     pr.add_argument("--sheet", type=Path, help="draw the row band and each column (numbered) on the original image, for a person to check")
 
     args = ap.parse_args()
-    im = ImageOps.exif_transpose(open_or_exit(args.image, "image")).convert("RGB")
+    im = open_photo(args.image, "image").convert("RGB")
     W, H = im.size
 
     if args.cmd == "zoom":
