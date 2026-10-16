@@ -47,4 +47,4 @@ Open an issue with: your own photo (or a description if you would rather not pos
 
 ## Runtime checks
 
-Run `uv run skills/geo-sleuth/tests/test_runtime.py`, `test_board.py` and `test_regions.py` for offline regressions (routing, browser fallback, diagnostics, the candidate board, region packs); after changing `match.py` also run `test_match.py` (it installs OpenCV and torch but loads no model). The tests use only loopback HTTP and mocked service calls; they do not upload photos or download ML models. Use `doctor.py --network` separately for live reachability.
+Run `uv run skills/geo-sleuth/tests/test_runtime.py`, `test_board.py` and `test_regions.py` for offline regressions (routing, browser fallback, diagnostics, the candidate board, region packs); after changing `match.py` also run `test_match.py` (it installs OpenCV and torch but loads no model), and after changing `gazetteer.py` or a pack's admin data run `test_gazetteer.py`. The tests use only loopback HTTP and mocked service calls; they do not upload photos or download ML models. Use `doctor.py --network` separately for live reachability.
