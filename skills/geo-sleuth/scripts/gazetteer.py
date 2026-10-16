@@ -52,16 +52,40 @@ def _bbox_km2(b: list[float]) -> float:
     return abs(n - s) * 110.574 * abs(e - w) * 111.320 * math.cos(math.radians((s + n) / 2))
 
 
+# Name keys matched when looking a relation up by name, as in osm.py _area_sel: bilingual OSM names
+# (Inner Mongolia, Xinjiang and Tibet add a second script after a space, Hong Kong adds English) never equal the plain name,
+# and simplified Chinese forms are only in name:zh-Hans.
+NAME_KEYS = ("name", "name:zh", "name:zh-Hans")
+
+
+def _by_name(name: str, extra: str = "", scope: str = "") -> str:
+    """Union of admin-relation selectors matching name on any of NAME_KEYS (indexed tag lookups, fast)."""
+    q = name.replace("\\", "\\\\").replace('"', '\\"')
+    return "(" + "".join(f'rel{scope}["{k}"="{q}"]["boundary"="administrative"]{extra};' for k in NAME_KEYS) + ")"
+
+
+def _plain_name(t: dict, fallback: str) -> str:
+    """A bilingual name tag ("<Chinese> <Tibetan>") → the leading part that is one of the relation's own name:* values."""
+    name = t.get("name", fallback)
+    if " " in name:
+        heads = [v for k, v in t.items() if k.startswith("name:") and v and name.startswith(v + " ")]
+        if heads:
+            return max(heads, key=len)
+    return name
+
+
 def _rel_rows(data: dict) -> list[dict]:
-    rows = []
+    rows, seen = [], set()
     for el in data.get("elements", []):
-        if el.get("type") != "relation":
+        if el.get("type") != "relation" or el["id"] in seen:
             continue
         t, b = el.get("tags") or {}, el.get("bounds") or {}
         if not b:
             continue
+        seen.add(el["id"])
         bbox = [b["minlat"], b["minlon"], b["maxlat"], b["maxlon"]]
-        rows.append({"name": t.get("name", str(el["id"])), "name_en": t.get("name:en", ""), "osm_id": el["id"],
+        rows.append({"name": _plain_name(t, str(el["id"])), "name_en": t.get("name:en", ""), "osm_id": el["id"],
+                     "names": sorted({v for k, v in t.items() if k in NAME_KEYS and v}),
                      "admin_level": int(t.get("admin_level") or 0), "bbox": [round(v, 5) for v in bbox],
                      "bbox_km2": round(_bbox_km2(bbox), 1),
                      "center": [round((bbox[0] + bbox[2]) / 2, 5), round((bbox[1] + bbox[3]) / 2, 5)],
@@ -74,10 +98,9 @@ def find_relation(name: str, proxy: str | None, cache: Path, within: str | None 
     """Find admin relations by name (there can be several with the same name: Chaoyang District in Beijing and in Changchun), with bbox."""
     lv = f'["admin_level"="{level}"]' if level else ""
     if within:
-        ql = (f'[out:json][timeout:120];rel["name"="{within}"]["boundary"="administrative"];map_to_area->.p;'
-              f'rel(area.p)["name"="{name}"]["boundary"="administrative"]{lv};out tags bb;')
+        ql = f'[out:json][timeout:120];{_by_name(within)};map_to_area->.p;{_by_name(name, lv, "(area.p)")};out tags bb;'
     else:
-        ql = f'[out:json][timeout:120];rel["name"="{name}"]["boundary"="administrative"]{lv};out tags bb;'
+        ql = f'[out:json][timeout:120];{_by_name(name, lv)};out tags bb;'
     rows = _rel_rows(osm.run(ql, proxy, cache))
     rows.sort(key=lambda r: (r["admin_level"], -r["bbox_km2"]))
     return rows
