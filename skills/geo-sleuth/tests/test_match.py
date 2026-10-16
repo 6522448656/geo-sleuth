@@ -19,6 +19,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import match
 
 
+class RendererOverlayTests(unittest.TestCase):
+    def test_each_renderer_owns_its_overlay_and_plain_images_have_none(self):
+        import baidu_pano
+        import gsv
+        box = (.8, 0., 1., .1)
+        self.assertIsNone(match._overlay(None))
+        self.assertIsNone(match._overlay('gsv'))
+        with patch.object(baidu_pano, 'LOGO_BOX', box):
+            self.assertEqual(match._overlay('baidu'), box)
+        with patch.object(gsv, 'LOGO_BOX', box, create=True):
+            self.assertEqual(match._overlay('gsv'), box)
+
+
 class SiftTests(unittest.TestCase):
     def projected_matches(self, H, repeated=False):
         pa = np.float32([(x, y) for x in (20, 40, 60, 70) for y in (20, 40, 60)])
