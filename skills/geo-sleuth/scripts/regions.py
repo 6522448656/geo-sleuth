@@ -86,6 +86,18 @@ def osm_name_keys() -> tuple[str, ...]:
     return ("name", *sorted(extra))
 
 
+def poi_for_script(text: str) -> dict | None:
+    """The poi service of the first pack whose services.poi.keyword_scripts (Unicode character-name prefixes, e.g.
+    "CJK UNIFIED IDEOGRAPH") match a character of text: the default sources when poi.py gets no --region."""
+    import unicodedata as ud
+    names = [ud.name(ch, "") for ch in text]
+    for _, m in sorted(packs().items()):
+        poi = (m.get("services") or {}).get("poi") or {}
+        if any(n.startswith(tuple(poi.get("keyword_scripts") or ())) for n in names if n):
+            return poi
+    return None
+
+
 def resolve(country: str | None) -> dict | None:
     """Country code / name / alias → pack, or None when no installed pack matches."""
     if not country:
@@ -361,6 +373,9 @@ def lint(pack: dict) -> tuple[list[str], list[str]]:
     keys = pack.get("osm_name_keys")
     if keys is not None and not (isinstance(keys, list) and all(isinstance(k, str) and k.startswith("name:") for k in keys)):
         errs.append("region.json: 'osm_name_keys' must be a list of OSM name:* tags")
+    scripts = ((pack.get("services") or {}).get("poi") or {}).get("keyword_scripts")
+    if scripts is not None and not (isinstance(scripts, list) and all(isinstance(s, str) and s.strip() for s in scripts)):
+        errs.append("region.json: 'services.poi.keyword_scripts' must be a list of Unicode character-name prefixes")
     also = pack.get("also_children")
     if also is not None and not (isinstance(also, list) and all(isinstance(n, str) and n.strip() for n in also)):
         errs.append("region.json: 'also_children' must be a list of OSM relation names")

@@ -16,7 +16,7 @@
  },
  "docs": ["clues.md", "search.md"],
  "services": {
-  "poi": {"sources": "so,osm,sug", "country": "cn"},
+  "poi": {"sources": "so,osm,sug", "country": "cn", "keyword_scripts": ["CJK UNIFIED IDEOGRAPH"]},
   "street_view": "baidu_pano.py",
   "datum": "GCJ-02 on Chinese web maps; report WGS84 and GCJ-02 (geo.py convert)"
  },

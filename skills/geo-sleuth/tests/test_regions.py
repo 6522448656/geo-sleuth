@@ -53,6 +53,13 @@ class BundledPacks(unittest.TestCase):
         r = run("regions.py", "lint")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
+    def test_poi_default_sources_come_from_the_pack_that_claims_the_script(self):
+        for keyword, sources in (("万科城", "so,osm,sug"), ("東京タワー", "so,osm,sug"), ("Starbucks", None), ("서울역", None)):
+            self.assertEqual((regions.poi_for_script(keyword) or {}).get("sources"), sources, keyword)
+        from unittest.mock import patch
+        with patch.object(regions, "packs", return_value={}):
+            self.assertIsNone(regions.poi_for_script("万科城"))      # core itself prefers no country
+
     def test_cn_lookups_keep_their_answers(self):
         m = regions.lookup("plate", "粤B·12345", "cn")["matches"]
         self.assertEqual([(x["admin1"], x.get("admin2")) for x in m], [("广东省", "深圳市")])
