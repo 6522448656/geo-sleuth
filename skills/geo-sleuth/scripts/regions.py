@@ -82,7 +82,8 @@ def _fold(s: str) -> str:
 def osm_name_keys() -> tuple[str, ...]:
     """OSM tags to match a place name on: `name`, plus every installed pack's `osm_name_keys` (CN: name:zh, name:zh-Hans,
     because OSM's `name` adds a second script for some regions and simplified forms live only in name:zh-Hans)."""
-    extra = {k for m in packs().values() for k in m.get("osm_name_keys") or [] if isinstance(k, str) and k.startswith("name:")}
+    extra = {k for m in packs().values() if isinstance(m.get("osm_name_keys"), list)
+             for k in m["osm_name_keys"] if isinstance(k, str) and k.startswith("name:")}
     return ("name", *sorted(extra))
 
 
@@ -92,8 +93,12 @@ def poi_for_script(text: str) -> dict | None:
     import unicodedata as ud
     names = [ud.name(ch, "") for ch in text]
     for _, m in sorted(packs().items()):
-        poi = (m.get("services") or {}).get("poi") or {}
-        if any(n.startswith(tuple(poi.get("keyword_scripts") or ())) for n in names if n):
+        services = m.get("services") or {}
+        poi = services.get("poi") if isinstance(services, dict) else None
+        scripts = poi.get("keyword_scripts") if isinstance(poi, dict) else None
+        if not isinstance(scripts, list) or not all(isinstance(s, str) and s.strip() for s in scripts):
+            continue   # lint reports malformed settings; other packs must keep working
+        if any(n.startswith(tuple(scripts)) for n in names if n):
             return poi
     return None
 
@@ -373,7 +378,15 @@ def lint(pack: dict) -> tuple[list[str], list[str]]:
     keys = pack.get("osm_name_keys")
     if keys is not None and not (isinstance(keys, list) and all(isinstance(k, str) and k.startswith("name:") for k in keys)):
         errs.append("region.json: 'osm_name_keys' must be a list of OSM name:* tags")
-    scripts = ((pack.get("services") or {}).get("poi") or {}).get("keyword_scripts")
+    services = pack.get("services", {})
+    if not isinstance(services, dict):
+        errs.append("region.json: 'services' must be an object")
+        services = {}
+    poi = services.get("poi", {})
+    if not isinstance(poi, dict):
+        errs.append("region.json: 'services.poi' must be an object")
+        poi = {}
+    scripts = poi.get("keyword_scripts")
     if scripts is not None and not (isinstance(scripts, list) and all(isinstance(s, str) and s.strip() for s in scripts)):
         errs.append("region.json: 'services.poi.keyword_scripts' must be a list of Unicode character-name prefixes")
     also = pack.get("also_children")
