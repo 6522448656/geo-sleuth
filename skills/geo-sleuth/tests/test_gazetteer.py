@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -100,6 +102,42 @@ class LiveMessages(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("retrying in 15 s", r.stderr)               # reached the caller's terminal as it happened
         self.assertIn("child stdout: result None", r.stdout)
+
+
+class ChildMembership(unittest.TestCase):
+    def test_membership_uses_any_pack_and_preserves_unknown_or_ambiguous_names(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            items = [{"name": n, "parent": p, "level": lv} for n, p, lv in
+                     [("North", "", 1), ("South", "", 1), ("Inside", "North", 2),
+                      ("Outside", "South", 2), ("Shared", "North", 2), ("Shared", "South", 2)]]
+            (root / 'admin.json').write_text(json.dumps({'items': items}), encoding='utf-8')
+            pack = {'code': 'QQ', 'dir': root, 'admin_table': 'admin.json'}
+            rows = [{'name': n} for n in ('Inside', 'Outside', 'Shared', 'Unmapped')]
+            with patch.object(gazetteer.regions, 'packs', return_value={'QQ': pack}):
+                kept = gazetteer._filter_known_neighbours({'name': 'North'}, rows)
+            self.assertEqual([r['name'] for r in kept], ['Inside', 'Shared', 'Unmapped'])
+
+    def test_known_neighbour_is_not_added_to_the_wrong_province(self):
+        parent = gazetteer._rel_rows({"elements": [INNER_MONGOLIA]})[0]
+        data = {"elements": [rel(1, 5, name="呼和浩特市"), rel(2, 5, name="包头市"), rel(3, 5, name="忻州市")]}
+        with patch.object(gazetteer, "find_relation", return_value=[parent]), patch.object(gazetteer.osm, "run", return_value=data):
+            _, rows = gazetteer.children(parent["name"], None, Path('.'), 5, None)
+        self.assertEqual({r['name'] for r in rows}, {"呼和浩特市", "包头市"})
+
+    def test_absent_pack_does_not_silently_filter_osm_children(self):
+        parent = gazetteer._rel_rows({"elements": [INNER_MONGOLIA]})[0]
+        data = {"elements": [rel(1, 5, name="呼和浩特市"), rel(2, 5, name="包头市"), rel(3, 5, name="忻州市")]}
+        with patch.object(gazetteer.regions, "packs", return_value={}), patch.object(gazetteer, "find_relation", return_value=[parent]), patch.object(gazetteer.osm, "run", return_value=data):
+            _, rows = gazetteer.children(parent["name"], None, Path('.'), 5, None)
+        self.assertEqual(len(rows), 3)
+
+    def test_explicit_level_keeps_a_single_valid_child(self):
+        parent = gazetteer._rel_rows({"elements": [INNER_MONGOLIA]})[0]
+        data = {"elements": [rel(1, 5, name="呼和浩特市"), rel(2, 5, name="忻州市")]}
+        with patch.object(gazetteer, 'find_relation', return_value=[parent]), patch.object(gazetteer.osm, 'run', return_value=data):
+            _, rows = gazetteer.children(parent['name'], None, Path('.'), 5, None)
+        self.assertEqual([r['name'] for r in rows], ['呼和浩特市'])
 
 
 if __name__ == "__main__":

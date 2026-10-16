@@ -99,6 +99,23 @@ def find_relation(name: str, proxy: str | None, cache: Path, within: str | None 
     return rows
 
 
+def _filter_known_neighbours(parent: dict, rows: list[dict]) -> list[dict]:
+    """An area query also returns relations touching the border. Drop only places the same pack locates outside this parent;
+    unknown names and ambiguous parents stay in the results, because a partial admin table cannot prove they are outside."""
+    parents = regions.admin_find(parent["name"])
+    if len(parents) != 1:
+        return rows
+    pack, item = parents[0]
+    kept = []
+    for row in rows:
+        hits = [hit for name in {row["name"], *row.get("names", [])} for _, hit in regions.admin_find(name, pack["code"])]
+        if hits and not any(item["name"] in regions.admin_chain(pack, hit)[:-1] for hit in hits):
+            print(f"Skipping {row['name']}: {pack['code']} admin table places it outside {parent['name']}", file=sys.stderr)
+        else:
+            kept.append(row)
+    return kept
+
+
 def children(parent: str, proxy: str | None, cache: Path, level: int | None, within: str | None) -> tuple[dict, list[dict]]:
     ps = find_relation(parent, proxy, cache, within)
     if not ps:
@@ -110,12 +127,12 @@ def children(parent: str, proxy: str | None, cache: Path, level: int | None, wit
         ql = (f'[out:json][timeout:180];rel({p["osm_id"]});map_to_area->.a;'
               f'rel(area.a)["boundary"="administrative"]["admin_level"="{lv}"];out tags bb;')
         rows = _rel_rows(osm.run(ql, proxy, cache))
-        rows = [r for r in rows if r["osm_id"] != p["osm_id"]]
-        if len(rows) < 2:
-            continue
+        rows = _filter_known_neighbours(p, [r for r in rows if r["osm_id"] != p["osm_id"]])
         rows = sorted(rows, key=lambda r: r["name"])
         if level:
             return p, rows
+        if len(rows) < 2:
+            continue
         # Auto level pick: a level that covers only a small part of the parent isn't the "next level" (China's admin_level 3 is only Hong Kong and Macau; provinces are 4)
         cover = sum(r["bbox_km2"] for r in rows) / max(p["bbox_km2"], 1e-9)
         if cover >= MIN_COVER:
