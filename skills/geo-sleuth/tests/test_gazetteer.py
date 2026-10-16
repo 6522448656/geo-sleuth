@@ -51,8 +51,15 @@ class BilingualNames(unittest.TestCase):
 
     def test_name_lookup_matches_every_name_key_and_escapes_quotes(self):
         sel = gazetteer._by_name('A "B"', '["admin_level"="4"]', "(area.p)")
-        for key in gazetteer.NAME_KEYS:
+        for key in gazetteer.regions.osm_name_keys():
             self.assertIn(f'rel(area.p)["{key}"="A \\"B\\""]["boundary"="administrative"]["admin_level"="4"];', sel)
+
+    def test_extra_name_keys_come_from_region_packs_not_core(self):
+        self.assertEqual(gazetteer.regions.osm_name_keys(), ("name", "name:zh", "name:zh-Hans"))   # declared by the CN pack
+        with patch.object(gazetteer.regions, "packs", return_value={}):
+            self.assertEqual(gazetteer.regions.osm_name_keys(), ("name",))
+            self.assertEqual(gazetteer._by_name("X"), '(rel["name"="X"]["boundary"="administrative"];)')
+            self.assertEqual(gazetteer.osm._area_sel("X", "a"), '(area["name"="X"];)->.a;')
 
 
 class AlsoChildren(unittest.TestCase):

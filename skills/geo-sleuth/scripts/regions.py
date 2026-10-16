@@ -79,6 +79,13 @@ def _fold(s: str) -> str:
     return re.sub(r"[\s.()\-_'’]", "", s)
 
 
+def osm_name_keys() -> tuple[str, ...]:
+    """OSM tags to match a place name on: `name`, plus every installed pack's `osm_name_keys` (CN: name:zh, name:zh-Hans,
+    because OSM's `name` adds a second script for some regions and simplified forms live only in name:zh-Hans)."""
+    extra = {k for m in packs().values() for k in m.get("osm_name_keys") or [] if isinstance(k, str) and k.startswith("name:")}
+    return ("name", *sorted(extra))
+
+
 def resolve(country: str | None) -> dict | None:
     """Country code / name / alias → pack, or None when no installed pack matches."""
     if not country:
@@ -351,6 +358,9 @@ def lint(pack: dict) -> tuple[list[str], list[str]]:
             errs.append(f"docs: {rel} not found")
             continue
         _lint_entries(f, rel, errs, warns)
+    keys = pack.get("osm_name_keys")
+    if keys is not None and not (isinstance(keys, list) and all(isinstance(k, str) and k.startswith("name:") for k in keys)):
+        errs.append("region.json: 'osm_name_keys' must be a list of OSM name:* tags")
     also = pack.get("also_children")
     if also is not None and not (isinstance(also, list) and all(isinstance(n, str) and n.strip() for n in also)):
         errs.append("region.json: 'also_children' must be a list of OSM relation names")

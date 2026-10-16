@@ -53,6 +53,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent))
+import regions  # noqa: E402
+
 # Independent services only: overpass.kumi.systems is the old name of private.coffee (same server), so it can't confirm or replace it
 ENDPOINTS = [
     "https://overpass-api.de/api/interpreter",
@@ -136,11 +139,11 @@ def run(ql: str, proxy: str | None, cache: Path, timeout: int = 180, rounds: int
 
 def _area_sel(name: str, var: str, loose: bool = False) -> str:
     """Get OSM areas by name and store them in set var.
-    Chinese ethnic autonomous regions have bilingual names in OSM ("新疆维吾尔自治区 شىنجاڭ…" (Xinjiang), "西藏自治区 བོད་…" (Tibet), Inner Mongolia with Mongolian script),
-    so ["name"="…"] alone silently returns 0 results; that's why name:zh / name:zh-Hans are matched too (indexed, fast).
-    loose=True also adds a prefix regex "name + space + other text" as a fallback for bilingual names without name:zh; it scans all area names, which is slow, so use it only when the lookup above finds nothing."""
+    Some areas have bilingual names in OSM ("<local name> <second script>"), so ["name"="…"] alone silently returns 0 results;
+    the region packs' extra name keys (regions.osm_name_keys) are matched too (indexed, fast).
+    loose=True also adds a prefix regex "name + space + other text" as a fallback for bilingual names without such a key; it scans all area names, which is slow, so use it only when the lookup above finds nothing."""
     q = name.replace("\\", "\\\\").replace('"', '\\"')
-    sel = f'area["name"="{q}"];area["name:zh"="{q}"];area["name:zh-Hans"="{q}"];'
+    sel = "".join(f'area["{k}"="{q}"];' for k in regions.osm_name_keys())
     if loose:
         rx = re.sub(r'([.^$*+?()\[\]{}|\\])', r"\\\\\1", name).replace('"', '\\"')
         sel += f'area["name"~"^{rx} "];'
@@ -499,7 +502,7 @@ def cmd_coverage(args) -> dict:
     """How many features of a kind each candidate admin area has. Run it before enumerating candidates with OSM: districts with clearly low counts can't be excluded on OSM results and must be scanned separately with a satellite imagery grid."""
     rows = []
     for name in [a for a in args.areas.split(",") if a]:
-        for loose in (False, True):                       # bilingual names without name:zh: the second round falls back to the name prefix
+        for loose in (False, True):                       # bilingual names without a pack name key: the second round falls back to the name prefix
             ql = f'[out:json][timeout:120];{_area_sel(name, "a", loose)}.a out count;nwr{args.filter}(area.a);out count;'
             els = run(ql, args.proxy, args.cache).get("elements") or []
             counts = [int((e.get("tags") or {}).get("total", 0)) for e in els]
@@ -576,7 +579,7 @@ def cmd_geom(args) -> dict:
     out.write_text(json.dumps(gj, ensure_ascii=False), encoding="utf-8")
     if not feats and args.area and not getattr(args, "area_loose", False) and _area_count(args.area, args) == 0:
         if _area_count(args.area, args, loose=True) > 0:
-            print(f"\"{args.area}\" has a bilingual name in OSM and no name:zh; retrying by name prefix", file=sys.stderr)
+            print(f"\"{args.area}\" has a bilingual name in OSM and no matching name key; retrying by name prefix", file=sys.stderr)
             args.area_loose = True
             return cmd_geom(args)
         print(f"Note: no area named \"{args.area}\" found in OSM; 0 results doesn't mean there is nothing here; try another spelling or use --bbox", file=sys.stderr)

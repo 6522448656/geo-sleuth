@@ -52,16 +52,11 @@ def _bbox_km2(b: list[float]) -> float:
     return abs(n - s) * 110.574 * abs(e - w) * 111.320 * math.cos(math.radians((s + n) / 2))
 
 
-# Name keys matched when looking a relation up by name, as in osm.py _area_sel: bilingual OSM names
-# (Inner Mongolia, Xinjiang and Tibet add a second script after a space, Hong Kong adds English) never equal the plain name,
-# and simplified Chinese forms are only in name:zh-Hans.
-NAME_KEYS = ("name", "name:zh", "name:zh-Hans")
-
-
 def _by_name(name: str, extra: str = "", scope: str = "") -> str:
-    """Union of admin-relation selectors matching name on any of NAME_KEYS (indexed tag lookups, fast)."""
+    """Union of admin-relation selectors matching name on `name` and the region packs' extra name keys (regions.osm_name_keys):
+    a bilingual OSM name ("<local> <second script>") never equals the plain name. Indexed tag lookups, fast."""
     q = name.replace("\\", "\\\\").replace('"', '\\"')
-    return "(" + "".join(f'rel{scope}["{k}"="{q}"]["boundary"="administrative"]{extra};' for k in NAME_KEYS) + ")"
+    return "(" + "".join(f'rel{scope}["{k}"="{q}"]["boundary"="administrative"]{extra};' for k in regions.osm_name_keys()) + ")"
 
 
 def _plain_name(t: dict, fallback: str) -> str:
@@ -85,7 +80,7 @@ def _rel_rows(data: dict) -> list[dict]:
         seen.add(el["id"])
         bbox = [b["minlat"], b["minlon"], b["maxlat"], b["maxlon"]]
         rows.append({"name": _plain_name(t, str(el["id"])), "name_en": t.get("name:en", ""), "osm_id": el["id"],
-                     "names": sorted({v for k, v in t.items() if k in NAME_KEYS and v}),
+                     "names": sorted({v for k, v in t.items() if k in regions.osm_name_keys() and v}),
                      "admin_level": int(t.get("admin_level") or 0), "bbox": [round(v, 5) for v in bbox],
                      "bbox_km2": round(_bbox_km2(bbox), 1),
                      "center": [round((bbox[0] + bbox[2]) / 2, 5), round((bbox[1] + bbox[3]) / 2, 5)],
