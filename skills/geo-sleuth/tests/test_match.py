@@ -62,7 +62,7 @@ class SiftTests(unittest.TestCase):
         a[718:768, :120] = cv2.resize(rng.integers(0, 256, (25, 60), np.uint8), (120, 50), interpolation=cv2.INTER_CUBIC)
         im = Image.fromarray(a)
         self.assertGreaterEqual(match.sift_inliers(im, im)[0], 15)
-        self.assertEqual(match.sift_inliers(im, im, skip_b=match.BAIDU_LOGO), (0, 0))
+        self.assertEqual(match.sift_inliers(im, im, skip_b=match._overlay("baidu")), (0, 0))
 
     def test_blank_images_have_no_match(self):
         im = Image.new("RGB", (640, 480), "gray")

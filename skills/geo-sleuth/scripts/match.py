@@ -135,15 +135,10 @@ class Embedder:
         return arr.reshape(len(ims), nv, -1)
 
 
-# The Baidu Maps logo that baidu_pano.render bakes into the bottom-left of every view (x < 120, y > 715 on 1024×768),
-# as fractions x0,y0,x1,y1. Unmasked, logo matches logo between any two renders: a wrong candidate got 27 of its 30 inliers there.
-BAIDU_LOGO = (0.0, 0.93, 0.12, 1.0)
-
-
 def sift_inliers(a: Image.Image, b: Image.Image, max_side: int = 1024,
                  skip_a: tuple | None = None, skip_b: tuple | None = None) -> tuple[int, int]:
     """Inlier count (and match count) from SIFT + ratio test + RANSAC homography.
-    skip_a / skip_b: a fractional box x0,y0,x1,y1 of that image where no keypoints are taken (an overlay such as BAIDU_LOGO)."""
+    skip_a / skip_b: a fractional box x0,y0,x1,y1 of that image where no keypoints are taken (an overlay a renderer bakes in, such as baidu_pano.LOGO_BOX)."""
     import cv2
 
     def prep(im, skip):
@@ -206,6 +201,13 @@ def _items_from_panos(args) -> list[dict]:
             items.append({"id": pid, "heading": hd % 360, "pitch": args.pitch, "fov": args.fov, "wgs": v["wgs"],
                           "road": v.get("road", ""), "date": v.get("date", "")})
     return items
+
+
+def _overlay(engine: str | None) -> tuple | None:
+    """The box a street-view renderer bakes into every view (its LOGO_BOX), to keep out of SIFT; None for plain images."""
+    if not engine:
+        return None
+    return getattr(__import__("baidu_pano" if engine == "baidu" else "gsv"), "LOGO_BOX", None)
 
 
 def _render_items(items: list[dict], engine: str, proxy: str | None, cache: Path) -> list[Image.Image | None]:
@@ -335,7 +337,7 @@ def cmd_rank(args) -> None:
     if args.refine != "none":
         top = rows[: args.refine_top]
         def one(r):
-            return sift_inliers(q, ims[r["id_key"]], skip_b=BAIDU_LOGO if items[r["id_key"]].get("render") == "baidu" else None)
+            return sift_inliers(q, ims[r["id_key"]], skip_b=_overlay(items[r["id_key"]].get("render")))
         with ThreadPoolExecutor(4) as ex:
             for r, (inl, mt) in zip(top, ex.map(one, top)):
                 r["inliers"], r["matches"] = inl, mt
