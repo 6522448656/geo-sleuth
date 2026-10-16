@@ -83,5 +83,17 @@ class AlsoChildren(unittest.TestCase):
         run.assert_not_called()
 
 
+class LiveMessages(unittest.TestCase):
+    def test_live_run_passes_stderr_through_and_still_returns_stdout(self):
+        code = "import sys; print('retrying in 15 s', file=sys.stderr); print('result')"
+        r = subprocess.run([sys.executable, "-c",
+                            f"import sys; sys.path.insert(0, {str(SCRIPTS)!r}); import board; "
+                            f"r = board._run([sys.executable, '-c', {code!r}], live=True); print('child stdout:', r.stdout.strip(), r.stderr)"],
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("retrying in 15 s", r.stderr)               # reached the caller's terminal as it happened
+        self.assertIn("child stdout: result None", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

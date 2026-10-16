@@ -121,10 +121,11 @@ def _log(b: dict, text: str) -> None:
     b.setdefault("log", []).append(f"{datetime.now():%H:%M} {text}")
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """Run gazetteer.py, clues.py. Child scripts and this one both use UTF-8: Chinese Windows reads and writes GBK by default, and if the two sides differ you get mojibake or crashes."""
-    return subprocess.run(cmd, text=True, encoding="utf-8", errors="replace", capture_output=True,
-                          env={**os.environ, "PYTHONUTF8": "1"})
+def _run(cmd: list[str], live: bool = False) -> subprocess.CompletedProcess:
+    """Run gazetteer.py, clues.py. Child scripts and this one both use UTF-8: Chinese Windows reads and writes GBK by default, and if the two sides differ you get mojibake or crashes.
+    live=True passes the child's stderr straight through: Overpass retries can take many minutes, and captured they look like a hang."""
+    return subprocess.run(cmd, text=True, encoding="utf-8", errors="replace", stdout=subprocess.PIPE,
+                          stderr=None if live else subprocess.PIPE, env={**os.environ, "PYTHONUTF8": "1"})
 
 
 def _bbox_km2(bb: list[float]) -> float:
@@ -381,13 +382,10 @@ def cmd_children(args, p: Path) -> None:
         cmd += ["--within", args.within]
     if args.proxy:
         cmd += ["--proxy", args.proxy]
-    r = _run(cmd)
-    for line in r.stderr.splitlines():
-        if "not treated as the next level" in line or "falling back to the first" in line:
-            print(line)
+    r = _run(cmd, live=True)
     out = r.stdout.strip(); print(out if len(out) < 1800 else out[:1800].rsplit('\n', 1)[0] + '\n  …')
     if r.returncode != 0:
-        sys.exit(f"gazetteer failed: {r.stderr.strip()[-600:]}")
+        sys.exit("gazetteer failed; its messages are above")
     kids = json.loads((p.parent / ".gz_children.json").read_text(encoding="utf-8"))
     as_level, why = _child_level(b, args, out)
     # Stable ids from a region pack's admin table, so lookups (plates, area codes) land on these same candidates
@@ -583,9 +581,9 @@ def cmd_urban(args, p: Path) -> None:
         cmd += ["--within", args.within]
     if args.proxy:
         cmd += ["--proxy", args.proxy]
-    r = _run(cmd)
+    r = _run(cmd, live=True)
     if r.returncode != 0:
-        sys.exit(f"gazetteer urban failed: {r.stderr.strip()[-600:]}")
+        sys.exit("gazetteer urban failed; its messages are above")
     d = json.loads(r.stdout[r.stdout.index("{"):])
     if d.get("urban_bbox"):
         b["candidates"][cname]["scan_bbox"] = d["urban_bbox"]
