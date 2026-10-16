@@ -235,6 +235,13 @@ class OverpassMirrorTests(unittest.TestCase):
         data, _, _ = self.run_with(lambda ep, q: (count(0) if ep == osm.ENDPOINTS[0] else count(1), ""), ql)
         self.assertEqual(data["elements"][0]["tags"]["total"], "1")
 
+    def test_empty_admin_level_inside_a_relation_needs_a_second_mirror(self):
+        ql = ('[out:json][timeout:180];rel(161349);map_to_area->.a;'
+              'rel(area.a)["boundary"="administrative"]["admin_level"="5"];out tags bb;')
+        data, calls, cached = self.run_with(lambda ep, q: ({"elements": []} if ep == osm.ENDPOINTS[0] else {"elements": [LINE]}, ""), ql)
+        self.assertEqual(len(data["elements"]), 1)
+        self.assertEqual(calls, osm.ENDPOINTS[:2])
+
     def test_bbox_empty_is_trusted(self):
         ql = '[out:json][timeout:180];nwr["power"="line"](37.6,95.2,37.8,95.4);out geom tags;'
         _, calls, cached = self.run_with(lambda ep, q: ({"elements": []}, ""), ql)

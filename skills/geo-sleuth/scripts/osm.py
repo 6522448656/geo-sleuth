@@ -84,8 +84,9 @@ def _post(ep: str, ql: str, proxy: str | None, timeout: int) -> tuple[dict | Non
 
 def _area_empty(data: dict, ql: str) -> bool:
     """An --area query that came back empty (or with a zero area count). Mirrors disagree on these: one answered a whole-province
-    power-line query with a clean, empty result while others returned thousands, so an empty answer needs a second mirror."""
-    if not AREA_SET.search(ql):
+    power-line query with a clean, empty result while others returned thousands, so an empty answer needs a second mirror.
+    The same goes for rel(<id>);map_to_area (gazetteer.py): a false empty level made `children` skip Inner Mongolia's prefectures."""
+    if not AREA_SET.search(ql) and "map_to_area" not in ql:
         return False
     els = data.get("elements") or []
     if els and els[0].get("type") == "count":            # coverage / _area_count: the first count is the area count
