@@ -103,7 +103,12 @@ def run(ql: str, proxy: str | None, cache: Path, timeout: int = 180, rounds: int
     cache.mkdir(parents=True, exist_ok=True)
     key = cache / (hashlib.sha1(ql.encode()).hexdigest()[:16] + ".json")
     if key.exists():
-        return json.loads(key.read_text(encoding="utf-8"))
+        cached = json.loads(key.read_text(encoding="utf-8"))
+        confirmed = cached.pop("_geo_empty_confirmed", False)
+        if not _area_empty(cached, ql) or confirmed is True:
+            return cached
+        # Older releases cached single-mirror empty results. They need the same check as a fresh response.
+        print("Rechecking an old empty area cache against the mirrors", file=sys.stderr)
     errs: dict[str, str] = {}
     empty_from = None
     for rnd in range(rounds):
@@ -123,7 +128,10 @@ def run(ql: str, proxy: str | None, cache: Path, timeout: int = 180, rounds: int
                 continue
             if remark:
                 print(f"Overpass remark (results may be incomplete): {remark[:200]}", file=sys.stderr)
-            key.write_text(json.dumps(data), encoding="utf-8")
+            stored = dict(data)
+            if empty_from is not None and _area_empty(data, ql):
+                stored["_geo_empty_confirmed"] = True
+            key.write_text(json.dumps(stored), encoding="utf-8")
             return data
         if empty_from is not None:
             print(f"Only {empty_from} answered, with an empty --area result; not confirmed by a second mirror, so not cached. "
