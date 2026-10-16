@@ -135,6 +135,25 @@ def children(parent: str, proxy: str | None, cache: Path, level: int | None, wit
     return p, first or []
 
 
+def also_children(parent: dict, rows: list[dict], proxy: str | None, cache: Path) -> tuple[list[dict], list[str]]:
+    """Areas a region pack lists next to a country's first-level divisions (region.json "also_children") that OSM's
+    admin tree leaves out or puts at another level. One query for all of them. (rows found, names not found)"""
+    pk = regions.resolve(parent["name"]) if parent.get("admin_level") == 2 else None
+    have = {n for r in rows for n in (r["name"], *r.get("names", []))}
+    want = [n for n in (pk or {}).get("also_children") or [] if n not in have]
+    if not want:
+        return [], []
+    found = _rel_rows(osm.run("[out:json][timeout:120];(" + "".join(_by_name(n) + ";" for n in want) + ");out tags bb;", proxy, cache))
+    out, missing = [], []
+    for n in want:
+        hits = sorted((r for r in found if n == r["name"] or n in r["names"]), key=lambda r: (r["admin_level"], -r["bbox_km2"]))
+        if not hits:
+            missing.append(n)
+        elif hits[0]["osm_id"] not in {r["osm_id"] for r in rows + out}:
+            out.append(hits[0])
+    return out, missing
+
+
 def _local_children(parent: str) -> tuple[list[str], str]:
     """Names of parent's direct children in a region pack's admin table, and the pack code ([] and "" when no pack knows the parent)."""
     pk, kids = regions.admin_children(parent)
@@ -294,6 +313,8 @@ def main() -> None:
         return
     if args.cmd == "children":
         p, rows = children(args.name, args.proxy, cache, args.level, args.within)
+        also, also_missing = also_children(p, rows, args.proxy, cache) if rows and not args.level else ([], [])
+        rows += also
         local, code = _local_children(p["name"])
         names = {r["name"] for r in rows}
         pk = regions.resolve(code) or {}
@@ -305,6 +326,8 @@ def main() -> None:
         lvl = rows[0]["admin_level"] if rows else None
         print(f"{p['name']} (admin_level {p['admin_level']}) children admin_level {lvl}: OSM {len(rows)}"
               + (f", {code} pack's admin table adds {len(missing)} ({', '.join(missing)})" if missing else "")
+              + (f"; region pack also lists {', '.join(r['name'] for r in also)}" if also else "")
+              + (f"; not found in OSM: {', '.join(also_missing)}" if also_missing else "")
               + ("; no region pack's admin table has this parent, can't check the list is complete" if not local else ""))
         for name, r in sorted(out.items(), key=lambda kv: -(kv[1]["bbox_km2"] or 0)):
             b = r["bbox"]

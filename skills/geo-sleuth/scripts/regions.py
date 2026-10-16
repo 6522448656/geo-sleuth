@@ -351,6 +351,9 @@ def lint(pack: dict) -> tuple[list[str], list[str]]:
             errs.append(f"docs: {rel} not found")
             continue
         _lint_entries(f, rel, errs, warns)
+    also = pack.get("also_children")
+    if also is not None and not (isinstance(also, list) and all(isinstance(n, str) and n.strip() for n in also)):
+        errs.append("region.json: 'also_children' must be a list of OSM relation names")
     levels = set((pack.get("admin_levels") or {}).values())
     bad_lv = levels - set(MATCH_LEVELS)
     if bad_lv:
