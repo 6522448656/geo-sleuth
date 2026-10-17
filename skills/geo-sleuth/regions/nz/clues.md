@@ -5,11 +5,11 @@ Entries use the shared format (`references/clues/README.md`). Use these only aft
 ## Public transport
 
 ### Auckland Link bus names and liveries
-- Look for: a bus with readable CityLink lettering and a bright red body, or InnerLink lettering and a bright green body. Match the service name as well as the colour.
-- Points to: Auckland; CityLink serves the city centre and InnerLink serves the inner city and nearby suburbs. The brand alone does not identify a particular stop.
+- Look for: a bus with readable Link lettering in the matching colour: CityLink bright red, InnerLink bright green, OuterLink orange, TāmakiLink bright blue. Match the service name as well as the colour.
+- Points to: Auckland. CityLink: the city centre (Wynyard Quarter, Queen Street, Karangahape Road). InnerLink: the inner city and nearest suburbs (Parnell, Newmarket, Ponsonby Road). OuterLink: the inner suburbs, Newmarket to St Lukes through the city centre, Parnell, Herne Bay, Westmere, Point Chevalier and Mount Albert. TāmakiLink: Tāmaki Drive from Waitematā Station through Mission Bay and Saint Heliers to Glen Innes. The brand alone does not identify a particular stop.
 - Strength: medium (single source); needs another local clue. Colour without readable service text is weak.
-- Counterexamples: other buses can be red or green; generic "Link" text is insufficient. Out-of-service or transferred vehicles can be away from their usual routes, and replacement buses may lack the expected livery.
-- Sources: [Auckland Transport: Link bus service](https://at.govt.nz/bus-train-ferry/bus-services/link-bus-service) describes the CityLink and InnerLink colours and operating areas.
+- Counterexamples: other buses can be red, green, orange or blue; generic "Link" text is insufficient. Routes change: since 17 November 2024 OuterLink no longer runs through Epsom, Mount Eden and Balmoral, so older imagery can show it there. Out-of-service or transferred vehicles can be away from their usual routes, and replacement buses may lack the expected livery.
+- Sources: [Auckland Transport: Link bus service](https://at.govt.nz/bus-train-ferry/bus-services/link-bus-service) describes the four Link colours, their routes and the 2024 OuterLink change.
 
 ### Metlink public transport branding
 - Look for: the readable name "Metlink" on a public transport vehicle, stop sign, station sign or posted timetable; prefer fixed passenger information to an advertisement or a handheld ticket.
