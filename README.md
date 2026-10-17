@@ -62,6 +62,8 @@ On first use, ask the agent to run `doctor.py` from the installed skill’s `scr
 
 None of these photos had GPS data. Each case lists what the skill read from the photo, how it narrowed the search, and how far the result landed from the confirmed camera position.
 
+Each case is a record of one run by one model. The skill tells the agent how to work; what to query, how to filter and how many top results to check are the model's own decisions, so a different model or different decisions may not reach the same result. Under each case, *Reproduction conditions and checkpoints* lists the input, the hint, the key parameters and what each stage should still cover, so you can find the step where your own run diverged.
+
 <table>
 <tr>
 <td width="33%" align="center"><a href="#1-a-rice-paddy-and-a-viaduct"><img src="docs/case/thumb.jpg" alt="An oven at the edge of a rice paddy, a viaduct and a mountain behind"></a></td>
@@ -111,6 +113,18 @@ A phone photo with the EXIF stripped: a white oven at the edge of a harvested ri
 <sub>The run took about 72 minutes end to end, roughly half of it waiting on computation.</sub>
 </details>
 
+<details>
+<summary>Reproduction conditions and checkpoints</summary>
+<br>
+
+- **What this record is**: the table is the first time this method solved the photo (Claude Opus 5.0), not a blind re-run; its steps were later written into the skill.
+- **Input**: a 1280×1707 phone photo with EXIF stripped. The images in this README are display versions and are not suitable as input.
+- **Candidates**: all 27,335 OSM railway-bridge segments in the region, excluding only those tagged `electrified=no` (as `rail_mtn_scan.py` did then and `terrain.py scan` does by default now), with no `highspeed` filter. Catenary masts only show that the line is electrified; the correct line, the Guangzhou–Qingyuan intercity, has 55 bridge segments in OSM and none is tagged `highspeed=yes`.
+- **Checkpoints**: the 171 sites that pass the horizon test should include intercity bridge segments near the answer; the skyline fit covers 14,372 camera positions, the top 20 lie within 0.1°, and "bridge near on the left, far on the right" cuts them to 22; the top three are overlaid; the 17 pier bearings fix the point.
+- **Case scripts**: `examples/rail-skyline-session/` holds the scripts tuned to this photo. OSM splits one line into many ways with the same name; `joint.py` tries every same-name way near the candidate center in turn, so the result does not depend on the order the query returns them.
+
+</details>
+
 ### 2. A desert skyline, one degree off
 
 A sand dune in the foreground, a range of bare dark mountains behind it, and a few pylons at the foot of the range. There is no text, road or building in the frame, and reverse image search returned only generic desert photos from northwest China.
@@ -141,6 +155,18 @@ A sand dune in the foreground, a range of bare dark mountains behind it, and a f
 
 **Blind re-run.** Later we gave the photo to a new agent running the current skill, with one hint: it is in China. It scanned the 5,334 power lines in Qinghai, fit 792 sites, and picked one at 0.224° against 0.357° for the next. It ended on the same dune crest, **87 m from the confirmed camera position**, after 32 minutes. The roll fit added for this photo is now part of `terrain.py fit`; [Contributing](#contributing) explains why this case is the reference for changes to the core scripts.
 
+<details>
+<summary>Reproduction conditions and checkpoints</summary>
+<br>
+
+- **Two runs**: the table is the original solve that led to the roll fit (Claude Opus 5.0); the blind re-run came later, with a new agent on Claude Opus 5.5.
+- **Blind run input and hint**: the original 2048×1152 photo; the only hint was "it is in China". The images in this README are display versions.
+- **Blind run checkpoints**: 5,334 power lines in Qinghai; `terrain.py scan` with the default `--cluster-km 3.5` turned 14,843 hits into 792 clusters; all 792 went into `terrain.py fit` (in 6 batches), with no satellite-ranking cut before the skyline fit; the best site scored 0.224° against 0.357° for the next; satellite imagery along the line of sight then found the dunes and the camp. 87 tool calls, 32 minutes.
+- **Clusters to fit**: `fit` lays its camera grid around each cluster's representative point only. With a larger `--cluster-km`, hits far from the representative may never be fit; `scan` now records each cluster's reach (`extent_m`) and `fit` prints a WARNING when a cluster is wider than its `--radius`.
+- **Example**: `examples/desert-roll-fix/` reproduces the fit before and after the roll change on the fixed 12 sites (true site from #8 at 12.0 px to #1 at 6.2 px).
+
+</details>
+
 ### 3. A cherry tree on a Vancouver street
 
 A flowering cherry over a sidewalk. The plates and street furniture place it in Vancouver. Finding the street is the hard part, because the city has close to ten thousand blocks.
@@ -165,6 +191,17 @@ A flowering cherry over a sidewalk. The plates and street furniture place it in 
 </div>
 
 **Blind re-run.** The table above comes from a blind run: a new agent running the current skill, given the photo and no hint. It finished in 53 minutes, **3 m from the confirmed camera position**.
+
+<details>
+<summary>Reproduction conditions and checkpoints</summary>
+<br>
+
+- **What this record is**: the table is the blind run itself (Claude Opus 5.5, a new agent, the photo and no hint): 154 tool calls, 53 minutes.
+- **Input**: the original 1440×1920 photo. The images in this README were cropped and then downscaled to about 1/16 of the original pixels, and are not suitable as input.
+- **Checkpoints**: 184,517 street trees with coordinates in the city's data → 1,095 ornamental cherries with trunk diameter ≥ 40 cm → 97 street segments with at least three → 72 segments where the cross slope could be measured → a few left after matching which side the large trees stand on and which way the slope falls.
+- **Street-view check**: the whole-image `match.py` ranking was poor (peak bloom, and the photo was taken from the sidewalk while the street-view car drove down the middle), so the run compared only the tree region with `--query-box 0,900,1440,1600`, then checked 2009 and 2024 street view for stable features: stone walls, steps, lamp posts. The true spot had only 0–5 SIFT inliers and was not rejected on that basis. In `match.py` output, empty `inliers` (`refined: false`) means the candidate was not refined, not that it had 0 matches.
+
+</details>
 
 ## Installation
 
