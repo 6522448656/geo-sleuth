@@ -35,11 +35,11 @@ General order when the country is still open: driving side and plate shape to ex
 - Sources: v001
 
 ### Simplified vs traditional Chinese script on signs
-- Look for: simplified vs traditional forms on signs, judged only from characters that differ between the two systems (门/門, 车/車, 东/東, 马/馬); characters the two share (中, 大, 山, 路) tell you nothing. Read official signs (street-name boards, road signs, government notices) separately from shop signs. First rule out Japanese: kana anywhere means this is not the clue, and Japanese kanji often keep the traditional forms (門, 車)
-- Points to: consistent simplified on official signs → mainland China or Singapore; consistent traditional on official signs → Taiwan (China), Hong Kong (China) or Macau (China); Malaysia and overseas Chinatowns mix both
-- Strength: medium when several independent official signs agree (still needs one more clue — plates, driving side or another language — to settle the place); weak for a single sign or shop signs only; never excludes a candidate on its own
-- Counterexamples: traditional characters on handwritten, calligraphic, heritage and old-brand shop signs in mainland China (allowed by law); simplified on tourist-facing shops in Hong Kong/Macau; mixed use in Malaysia and Chinatowns; Japanese kanji resemble traditional forms
-- Sources: Wikipedia "Simplified Chinese characters" (https://en.wikipedia.org/wiki/Simplified_Chinese_characters); Wikipedia "Traditional Chinese characters" (https://en.wikipedia.org/wiki/Traditional_Chinese_characters); Law of the PRC on the Standard Spoken and Written Chinese Language, Article 17
+- Look for: characters whose simplified and traditional forms differ (门/門, 车/車, 东/東); shared ones (中, 大, 山) say nothing. Judge official signs (street names, road signs, notices) apart from shop signs. Any kana → Japanese, not this clue
+- Points to: consistent simplified on official signs → mainland China or Singapore; consistent traditional → Taiwan (China), Hong Kong (China) or Macau (China); Malaysia and overseas Chinatowns mix both
+- Strength: medium when several independent official signs agree (still needs one more clue); weak for one sign or shop signs only; never excludes a candidate alone
+- Counterexamples: traditional on handwritten, calligraphic and old-brand shop signs in mainland China (legal there); simplified on tourist-facing shops in Hong Kong/Macau; Japanese kanji keep traditional forms (門, 車)
+- Sources: Wikipedia "Simplified Chinese characters", "Traditional Chinese characters"; PRC Law on the Standard Spoken and Written Chinese Language, Art. 17
 
 ### Sub-brands and business lines of chain brands
 - Look for: small marks on the sign besides the parent brand (truck tire retreading, commercial vehicle service, etc.)
@@ -93,14 +93,14 @@ When you recognize infrastructure built to "country X's standard", the candidate
 - Look for: a crossarm arching upward on top of a concrete or metal pole, three conductors hanging from suspension insulators (the "arched" layout of medium-voltage lines); identical poles lined up into the distance
 - Points to: the French grid system: metropolitan France and the overseas departments that keep its standards; some former North African colonies have similar pole types
 - Strength: medium (narrows the whole world to a few regions in the French system; then use IP, continent, and climate to fix one)
-- Counterexamples: border areas of neighboring countries have similar styles; former colonies later changed pole types; in small distant images an ordinary straight crossarm is easily seen as arched, so zoom in to verify
+- Counterexamples: border areas of neighboring countries have similar styles; former colonies later changed pole types; a straight crossarm can look arched in a small distant image, so zoom in
 - Sources: v013
 
 ## South Asia
 
 ### Sinhala script on official signs (Sri Lanka)
-- Look for: Sinhala script (rounded, looping letters with no line along the top, unlike Hindi script) on road signs, street-name boards and government signs; official signs often repeat the same text in Sinhala, Tamil and English, but many carry only one or two of the three
-- Points to: Sri Lanka; Sinhala is an official language there and is written almost nowhere else
+- Look for: Sinhala script (round, looping letters with no line along the top, unlike Hindi) on road signs, street-name boards and government signs; official signs often repeat the text in Sinhala, Tamil and English, but many show only one or two
+- Points to: Sri Lanka; Sinhala is official there and written almost nowhere else
 - Strength: medium
-- Counterexamples: Sinhala on temples, shops or embassies outside Sri Lanka; Malayalam (Kerala, India) is also rounded and can pass for Sinhala at low resolution; when only Tamil and English are visible (Sinhala cropped, blurred or absent from that sign), the sign can be mistaken for Tamil Nadu, India, so Tamil alone does not exclude Sri Lanka; private shop signs follow no official layout
-- Sources: Constitution of Sri Lanka, Articles 18–19 (https://www.constituteproject.org/constitution/Sri_Lanka_2015.pdf?lang=en); Wikipedia "Sinhala script" (https://en.wikipedia.org/wiki/Sinhala_script)
+- Counterexamples: Sinhala on temples, shops or embassies abroad; Malayalam (Kerala, India) looks similar at low resolution; a sign with only Tamil and English fits Tamil Nadu and Sri Lanka alike, so missing Sinhala does not exclude Sri Lanka
+- Sources: Constitution of Sri Lanka, Articles 18–19; Wikipedia "Sinhala script"
