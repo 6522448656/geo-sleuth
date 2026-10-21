@@ -111,6 +111,33 @@ uv run ${CLAUDE_SKILL_DIR}/scripts/match.py rank --query photo.jpg --query-box <
 - Compare multiple views of shortlisted targets. Repetitive brickwork can produce false SIFT matches; confirm ≥3 invariant features as in SKILL step 5.
 - Empty coverage does not exclude a target: the layer can omit panoramas that `gsv.py near <lat,lon> --radius 130` finds. Check shortlisted targets with `near`, including historical captures when appropriate.
 
+### Encyclopedia photo pool (churches, chapels, stations, lighthouses …)
+
+When the class is one that Wikidata lists with a photo per item (churches, chapels, mosques, railway stations, lighthouses, town halls), rank the whole class in the region from Commons photos before touching street view: it works where panorama coverage is thin, and Commons photos usually show the building from the street, as a visitor would.
+
+```bash
+# 1. Every item of the class in the region with coordinates and its P18 image (edit the class, country and bounding filter)
+cat > pool.rq <<'EOF'
+SELECT ?c ?cLabel ?coord ?img WHERE {
+  ?c wdt:P17 wd:<country QID>; wdt:P31/wdt:P279* wd:<class QID>; wdt:P625 ?coord .
+  OPTIONAL { ?c wdt:P18 ?img }
+  FILTER(geof:latitude(?coord) > <lat>)
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "<local>,en". }
+}
+EOF
+curl -s -G https://query.wikidata.org/sparql --data-urlencode query@pool.rq \
+     -H 'Accept: application/sparql-results+json' -H 'User-Agent: <tool name>/<version>' -o pool.json
+# 2. One thumbnail per item, named by QID: https://commons.wikimedia.org/wiki/Special:FilePath/<file name>?width=480 → thumbs/<QID>.jpg
+# 3. Rank them against the building in the photo
+uv run ${CLAUDE_SKILL_DIR}/scripts/match.py rank --query photo.jpg --query-box <building part> --images thumbs/ \
+     --method both --refine sift --top 24 --out pool_rank.json --sheet pool_rank.jpg
+```
+
+- Download thumbnails with a descriptive `User-Agent` and at most a few requests in parallel. Commons answers throttled requests with an HTML error page saved under the `.jpg` name: run `file thumbs/*`, and fetch every non-JPEG again one by one before ranking, or those items silently drop out.
+- Items without a P18 image are not ranked. Count them (`pool.json` rows minus thumbnails) and say so in the conclusion; they are not excluded.
+- Commons photos differ from the query in season, light and side of the building, so SIFT inliers stay near zero even for the right item. Open the top 24 in `pool_rank.jpg` and compare plan shape, tower and roof form, window rows and fence; a shortlisted item goes on the board with `board.py add` and needs ≥3 invariant features as in SKILL step 5.
+- The class filter (`P31/P279*`) misses items typed with an unrelated class. If nothing in the top 24 fits, widen the class (for churches also `wd:Q2977` cathedral and `wd:Q108325` chapel) before widening the region.
+
 ## Common mistakes
 
 - Using only one engine and searching only the whole image; after a failure, not changing the image or the engine.
