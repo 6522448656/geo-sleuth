@@ -116,27 +116,40 @@ uv run ${CLAUDE_SKILL_DIR}/scripts/match.py rank --query photo.jpg --query-box <
 When the class is one that Wikidata lists with a photo per item (churches, chapels, mosques, railway stations, lighthouses, town halls), rank the whole class in the region from Commons photos before touching street view: it works where panorama coverage is thin, and Commons photos usually show the building from the street, as a visitor would.
 
 ```bash
-# 1. Every item of the class in the region with coordinates and its P18 image (edit the class, country and bounding filter)
+# 1. Every item of the class inside the bbox, with coordinates and its P18 image. WKT points are "Point(lon lat)".
+#    The box service keeps the query fast; a country filter with P31/P279* on a large class times out (60 s limit).
 cat > pool.rq <<'EOF'
 SELECT ?c ?cLabel ?coord ?img WHERE {
-  ?c wdt:P17 wd:<country QID>; wdt:P31/wdt:P279* wd:<class QID>; wdt:P625 ?coord .
+  SERVICE wikibase:box {
+    ?c wdt:P625 ?coord .
+    bd:serviceParam wikibase:cornerSouthWest "Point(<w> <s>)"^^geo:wktLiteral ;
+                    wikibase:cornerNorthEast "Point(<e> <n>)"^^geo:wktLiteral .
+  }
+  ?c wdt:P31/wdt:P279* wd:<class QID> .
   OPTIONAL { ?c wdt:P18 ?img }
-  FILTER(geof:latitude(?coord) > <lat>)
   SERVICE wikibase:label { bd:serviceParam wikibase:language "<local>,en". }
 }
 EOF
+UA='<tool name>/<version> (<contact>)'
 curl -s -G https://query.wikidata.org/sparql --data-urlencode query@pool.rq \
-     -H 'Accept: application/sparql-results+json' -H 'User-Agent: <tool name>/<version>' -o pool.json
-# 2. One thumbnail per item, named by QID: https://commons.wikimedia.org/wiki/Special:FilePath/<file name>?width=480 → thumbs/<QID>.jpg
+     -H 'Accept: application/sparql-results+json' -A "$UA" -o pool.json
+jq -e .results pool.json >/dev/null || echo "not JSON: throttled or timed out, wait and retry"
+# 2. One thumbnail per item, named by QID (P18 values are already Special:FilePath URLs); one request at a time, reruns skip what is there
+mkdir -p thumbs
+jq -r '.results.bindings[] | select(.img) | [(.c.value | split("/")[-1]), .img.value] | @tsv' pool.json |
+  while IFS=$'\t' read -r qid url; do
+    [ -s "thumbs/$qid.jpg" ] || curl -sfL -A "$UA" "$url?width=480" -o "thumbs/$qid.jpg"; sleep 1
+  done
 # 3. Rank them against the building in the photo
 uv run ${CLAUDE_SKILL_DIR}/scripts/match.py rank --query photo.jpg --query-box <building part> --images thumbs/ \
      --method both --refine sift --top 24 --out pool_rank.json --sheet pool_rank.jpg
 ```
 
-- Download thumbnails with a descriptive `User-Agent` and at most a few requests in parallel. Commons answers throttled requests with an HTML error page saved under the `.jpg` name: run `file thumbs/*`, and fetch every non-JPEG again one by one before ranking, or those items silently drop out.
+- Wikimedia throttles clients without a descriptive `User-Agent` or with many parallel requests, and answers with an HTML error page (HTTP 429). `curl -f` keeps those pages out of `thumbs/`; files fetched another way can still be HTML under a `.jpg` name. `match.py` skips them with `skipped N of M files that are not readable images`: fetch those again before ranking, or the items drop out of the ranking.
+- `--images` has no `--max-candidates` cap and loads every thumbnail into memory. Keep one run to about 400 images by splitting the bbox; SIFT refinement within separate batches is not a global ranking.
 - Items without a P18 image are not ranked. Count them (`pool.json` rows minus thumbnails) and say so in the conclusion; they are not excluded.
 - Commons photos differ from the query in season, light and side of the building, so SIFT inliers stay near zero even for the right item. Open the top 24 in `pool_rank.jpg` and compare plan shape, tower and roof form, window rows and fence; a shortlisted item goes on the board with `board.py add` and needs ≥3 invariant features as in SKILL step 5.
-- The class filter (`P31/P279*`) misses items typed with an unrelated class. If nothing in the top 24 fits, widen the class (for churches also `wd:Q2977` cathedral and `wd:Q108325` chapel) before widening the region.
+- `P279*` already takes in the subclasses (for church building `wd:Q16970`: cathedrals, chapels). It misses items typed with an unrelated class, such as a church entered only as a heritage building. If nothing in the top 24 fits, widen to a parent class (`wd:Q1370598` structure of worship), then drop the class line and keep the items whose label names the building type, before widening the region.
 
 ## Common mistakes
 
